@@ -8,6 +8,33 @@ const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
 const WINTER_TRAINING_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
 const WINTER_TRAINING_TIMES = ["18:00", "19:00", "20:00"];
 const TIMELINE_PIXELS_PER_HOUR = 88;
+const REMOTE_STATE_RECORD_ID = "current";
+const TAB_DEFINITIONS = [
+  { id: "settings", label: "Settings" },
+  { id: "teams", label: "Teams" },
+  { id: "venues", label: "Venues" },
+  { id: "facilities", label: "Match Setup" },
+  { id: "assignments", label: "Match Plan" },
+  { id: "visual", label: "Match Visual" },
+  { id: "training", label: "Training" },
+  { id: "users", label: "Users" },
+];
+const USER_MANAGED_TABS = TAB_DEFINITIONS.filter((tab) => tab.id !== "users");
+const ROLE_DEFAULTS = {
+  admin: {
+    canWrite: true,
+    visibleTabs: TAB_DEFINITIONS.map((tab) => tab.id),
+  },
+  viewer: {
+    canWrite: false,
+    visibleTabs: USER_MANAGED_TABS.map((tab) => tab.id),
+  },
+};
+const HOSTED_CONFIG = {
+  supabaseUrl: String(window.APP_CONFIG?.supabaseUrl || "").trim(),
+  supabaseAnonKey: String(window.APP_CONFIG?.supabaseAnonKey || "").trim(),
+  adminUsersFunctionName: String(window.APP_CONFIG?.adminUsersFunctionName || "admin-users").trim() || "admin-users",
+};
 
 const defaultData = {
   season: { name: "2026/27", notes: "" },
@@ -23,6 +50,7 @@ const defaultData = {
 
 let state = structuredClone(defaultData);
 let persistenceDbPromise = null;
+let supabaseClient = null;
 const editState = {
   teamId: null,
   venueId: null,
@@ -30,9 +58,28 @@ const editState = {
   slotId: null,
   winterTeamId: null,
   summerTeamId: null,
+  userId: null,
 };
 const plannerUiState = { moveTeamId: null, dragTeamId: null };
+const authState = {
+  enabled: Boolean(HOSTED_CONFIG.supabaseUrl && HOSTED_CONFIG.supabaseAnonKey && window.supabase?.createClient),
+  ready: false,
+  session: null,
+  user: null,
+  profile: null,
+  users: [],
+};
 
+const authCard = document.getElementById("auth-card");
+const loginForm = document.getElementById("login-form");
+const loginEmailInput = document.getElementById("login-email");
+const loginPasswordInput = document.getElementById("login-password");
+const authMessage = document.getElementById("auth-message");
+const sessionPanel = document.getElementById("session-panel");
+const sessionTitle = document.getElementById("session-title");
+const sessionMeta = document.getElementById("session-meta");
+const signOutBtn = document.getElementById("sign-out-btn");
+const appMain = document.getElementById("app-main");
 const seasonForm = document.getElementById("season-form");
 const seasonNameInput = document.getElementById("season-name");
 const seasonNotesInput = document.getElementById("season-notes");
@@ -88,6 +135,20 @@ const summerTrainingBoard = document.getElementById("summer-training-board");
 const summerTrainingVisual = document.getElementById("summer-training-visual");
 const exportBtn = document.getElementById("export-btn");
 const importInput = document.getElementById("import-file");
+const importLabel = document.querySelector(".import-label");
+const userForm = document.getElementById("user-form");
+const userDisplayNameInput = document.getElementById("user-display-name");
+const userEmailInput = document.getElementById("user-email");
+const userPasswordInput = document.getElementById("user-password");
+const userRoleSelect = document.getElementById("user-role");
+const userCanWriteOverrideEnabledInput = document.getElementById("user-can-write-override-enabled");
+const userCanWriteOverrideInput = document.getElementById("user-can-write-override");
+const userTabOverrides = document.getElementById("user-tab-overrides");
+const userSubmitBtn = document.getElementById("user-submit-btn");
+const userCancelBtn = document.getElementById("user-cancel-btn");
+const usersBody = document.getElementById("users-body");
+const usersMessage = document.getElementById("users-message");
+const refreshUsersBtn = document.getElementById("refresh-users-btn");
 const tabButtons = document.querySelectorAll("[data-tab-target]");
 const tabPanels = document.querySelectorAll("[data-tab-panel]");
 const visualTabButton = document.querySelector('[data-tab-target="visual"]');
@@ -96,11 +157,20 @@ init();
 
 async function init() {
   bindEvents();
+  renderUserTabOverrideInputs();
+  syncUserOverrideControls();
+  if (authState.enabled) {
+    await initialiseHostedMode();
+    return;
+  }
   state = await loadState();
+  authState.ready = true;
   renderAll();
 }
 
 function bindEvents() {
+  loginForm.addEventListener("submit", onSignIn);
+  signOutBtn.addEventListener("click", onSignOut);
   seasonForm.addEventListener("submit", onSaveSeason);
   settingsForm.addEventListener("submit", onSaveSettings);
   teamForm.addEventListener("submit", onSaveTeam);
@@ -122,6 +192,11 @@ function bindEvents() {
   summerAutoBtn.addEventListener("click", autoFillSummerAssignments);
   summerClearBtn.addEventListener("click", clearSummerAssignments);
   summerCancelBtn.addEventListener("click", resetSummerTrainingForm);
+  userForm.addEventListener("submit", onSaveUser);
+  userCancelBtn.addEventListener("click", resetUserForm);
+  refreshUsersBtn.addEventListener("click", refreshUserDirectory);
+  userRoleSelect.addEventListener("change", syncUserOverrideControls);
+  userCanWriteOverrideEnabledInput.addEventListener("change", syncUserOverrideControls);
   tabButtons.forEach((button) =>
     button.addEventListener("click", () => setActiveTab(button.getAttribute("data-tab-target")))
   );
@@ -142,9 +217,12 @@ function renderAll() {
   renderPlannerOutputs();
   renderWinterTrainingPlanner();
   renderSummerTrainingPlanner();
+  renderUsers();
   syncEditorButtons();
   syncVisualPlannerTab();
-  setActiveTab(getActiveTabName() || "settings");
+  syncPermissionUi();
+  syncAuthUi();
+  setActiveTab(getAccessibleTabName(getActiveTabName() || "settings"));
 }
 
 function normalizeState(rawState = {}) {
@@ -261,7 +339,149 @@ function normalizeState(rawState = {}) {
   };
 }
 
+async function initialiseHostedMode() {
+  supabaseClient = window.supabase.createClient(HOSTED_CONFIG.supabaseUrl, HOSTED_CONFIG.supabaseAnonKey);
+  supabaseClient.auth.onAuthStateChange((_event, session) => {
+    void applySessionState(session);
+  });
+  const {
+    data: { session },
+  } = await supabaseClient.auth.getSession();
+  await applySessionState(session);
+}
+
+async function applySessionState(session) {
+  authState.session = session;
+  authState.user = session?.user || null;
+  authState.profile = null;
+  authState.users = [];
+
+  if (!session) {
+    state = structuredClone(defaultData);
+    authState.ready = true;
+    renderAll();
+    return;
+  }
+
+  const profile = await loadCurrentUserProfile();
+  authState.profile = profile;
+  if (profile?.isActive) {
+    state = await loadState();
+    if (isCurrentUserAdmin()) {
+      await refreshUserDirectory({ quiet: true });
+    }
+  } else {
+    state = structuredClone(defaultData);
+  }
+  authState.ready = true;
+  renderAll();
+}
+
+function normalizeProfile(rawProfile = {}) {
+  return {
+    userId: String(rawProfile.user_id || rawProfile.userId || ""),
+    email: String(rawProfile.email || "").trim(),
+    displayName: String(rawProfile.display_name || rawProfile.displayName || "").trim(),
+    role: String(rawProfile.role || "viewer").toLowerCase() === "admin" ? "admin" : "viewer",
+    canWriteOverride:
+      typeof rawProfile.can_write_override === "boolean"
+        ? rawProfile.can_write_override
+        : typeof rawProfile.canWriteOverride === "boolean"
+          ? rawProfile.canWriteOverride
+          : null,
+    tabOverrides: normalizeTabOverrides(rawProfile.tab_overrides || rawProfile.tabOverrides || {}),
+    isActive: toBoolean(rawProfile.is_active, true),
+  };
+}
+
+function normalizeTabOverrides(rawOverrides = {}) {
+  const normalized = {};
+  for (const tab of USER_MANAGED_TABS) {
+    const value = rawOverrides?.[tab.id];
+    if (typeof value === "boolean") {
+      normalized[tab.id] = value;
+    }
+  }
+  return normalized;
+}
+
+function getRoleDefaults(role = "viewer") {
+  return ROLE_DEFAULTS[role] || ROLE_DEFAULTS.viewer;
+}
+
+function getEffectivePermissions(profile = authState.profile) {
+  if (!profile) return { canWrite: false, visibleTabs: [] };
+  const defaults = getRoleDefaults(profile.role);
+  const visibleTabs = new Set(defaults.visibleTabs);
+  for (const [tabId, visible] of Object.entries(profile.tabOverrides || {})) {
+    if (visible) visibleTabs.add(tabId);
+    else visibleTabs.delete(tabId);
+  }
+  if (profile.role !== "admin") {
+    visibleTabs.delete("users");
+  }
+  return {
+    canWrite: typeof profile.canWriteOverride === "boolean" ? profile.canWriteOverride : defaults.canWrite,
+    visibleTabs: TAB_DEFINITIONS
+      .map((tab) => tab.id)
+      .filter((tabId) => visibleTabs.has(tabId)),
+  };
+}
+
+function isCurrentUserSignedIn() {
+  return Boolean(authState.enabled && authState.session && authState.user);
+}
+
+function isCurrentUserAdmin() {
+  return authState.enabled ? authState.profile?.role === "admin" : false;
+}
+
+function canCurrentUserWrite() {
+  if (!authState.enabled) return true;
+  if (!authState.profile?.isActive) return false;
+  return getEffectivePermissions().canWrite;
+}
+
+function userCanAccessTab(tabName, profile = authState.profile) {
+  if (!authState.enabled) return tabName !== "users";
+  if (!profile?.isActive) return false;
+  return getEffectivePermissions(profile).visibleTabs.includes(tabName);
+}
+
+function getAccessibleTabName(preferredTab = "settings") {
+  if (userCanAccessTab(preferredTab)) {
+    return preferredTab;
+  }
+  return (
+    TAB_DEFINITIONS.find((tab) => userCanAccessTab(tab.id) && (tab.id !== "visual" || state.settings.showVisualPlanner))?.id ||
+    null
+  );
+}
+
+function getTabLabel(tabId) {
+  return TAB_DEFINITIONS.find((tab) => tab.id === tabId)?.label || tabId;
+}
+
+async function loadCurrentUserProfile() {
+  try {
+    const { data, error } = await supabaseClient
+      .from("user_profiles")
+      .select("*")
+      .eq("user_id", authState.user.id)
+      .maybeSingle();
+    if (error) throw error;
+    return data ? normalizeProfile(data) : null;
+  } catch (error) {
+    console.error("Failed to load user profile.", error);
+    setAuthMessage("Signed in, but no access profile was found for this account.", "error");
+    return null;
+  }
+}
+
 async function loadState() {
+  if (authState.enabled) {
+    return loadRemoteState();
+  }
   try {
     const db = await getPersistenceDb();
     const persistedState = await readPersistedState(db);
@@ -283,12 +503,291 @@ async function loadState() {
 }
 
 async function saveState() {
+  if (authState.enabled) {
+    await saveRemoteState();
+    return;
+  }
   try {
     const db = await getPersistenceDb();
     await writePersistedState(db, state);
   } catch (error) {
     console.error("Failed to save IndexedDB state.", error);
   }
+}
+
+async function loadRemoteState() {
+  try {
+    const { data, error } = await supabaseClient
+      .from("app_state")
+      .select("data")
+      .eq("id", REMOTE_STATE_RECORD_ID)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data?.data || !Object.keys(data.data).length) return structuredClone(defaultData);
+    return normalizeState(data.data);
+  } catch (error) {
+    console.error("Failed to load Supabase state.", error);
+    setMessage("Unable to load shared data from Supabase.", "error");
+    return structuredClone(defaultData);
+  }
+}
+
+async function saveRemoteState() {
+  if (!canCurrentUserWrite()) return;
+  try {
+    const { error } = await supabaseClient.from("app_state").upsert({
+      id: REMOTE_STATE_RECORD_ID,
+      data: state,
+      updated_by: authState.user?.id || null,
+    });
+    if (error) throw error;
+  } catch (error) {
+    console.error("Failed to save Supabase state.", error);
+    setMessage("Unable to save shared data to Supabase.", "error");
+  }
+}
+
+function requireWriteAccess() {
+  if (canCurrentUserWrite()) return true;
+  setMessage("This account is read-only.", "error");
+  return false;
+}
+
+function requireAdminAccess() {
+  if (isCurrentUserAdmin()) return true;
+  setUsersMessage("Admin access is required to manage users.", "error");
+  return false;
+}
+
+function renderUserTabOverrideInputs(overrides = {}) {
+  userTabOverrides.innerHTML = USER_MANAGED_TABS.map((tab) => {
+    const current = overrides[tab.id];
+    const value = typeof current === "boolean" ? (current ? "show" : "hide") : "default";
+    return `
+      <label class="tab-override-control">
+        <span>${escapeHtml(tab.label)}</span>
+        <select name="tab-override-${tab.id}">
+          <option value="default"${value === "default" ? " selected" : ""}>Default</option>
+          <option value="show"${value === "show" ? " selected" : ""}>Show</option>
+          <option value="hide"${value === "hide" ? " selected" : ""}>Hide</option>
+        </select>
+      </label>`;
+  }).join("");
+}
+
+function readUserTabOverrides() {
+  const overrides = {};
+  USER_MANAGED_TABS.forEach((tab) => {
+    const control = userTabOverrides.querySelector(`[name="tab-override-${tab.id}"]`);
+    const value = control?.value || "default";
+    if (value === "show") overrides[tab.id] = true;
+    if (value === "hide") overrides[tab.id] = false;
+  });
+  return overrides;
+}
+
+function syncUserOverrideControls() {
+  userCanWriteOverrideInput.disabled = !userCanWriteOverrideEnabledInput.checked;
+  if (!userCanWriteOverrideEnabledInput.checked) {
+    const defaults = getRoleDefaults(userRoleSelect.value);
+    userCanWriteOverrideInput.checked = defaults.canWrite;
+  }
+  userPasswordInput.required = !editState.userId;
+  userPasswordInput.placeholder = editState.userId ? "Leave blank to keep current password" : "Required for new users";
+}
+
+function syncAuthUi() {
+  if (!authState.ready) {
+    appMain.hidden = true;
+    sessionPanel.hidden = true;
+    return;
+  }
+
+  sessionPanel.hidden = false;
+  if (!authState.enabled) {
+    authCard.hidden = true;
+    appMain.hidden = false;
+    signOutBtn.hidden = true;
+    sessionTitle.textContent = "Local Mode";
+    sessionMeta.textContent = "Running without Supabase. Data stays in this browser until hosted mode is configured.";
+    return;
+  }
+
+  const signedIn = isCurrentUserSignedIn();
+  authCard.hidden = signedIn;
+  signOutBtn.hidden = !signedIn;
+
+  if (!signedIn) {
+    appMain.hidden = true;
+    sessionTitle.textContent = "Sign In Required";
+    sessionMeta.textContent = "Use a shared account to access the hosted planner.";
+    return;
+  }
+
+  if (!authState.profile) {
+    appMain.hidden = true;
+    sessionTitle.textContent = "Profile Missing";
+    sessionMeta.textContent = "This account is authenticated, but no access profile exists for it yet.";
+    return;
+  }
+
+  if (!authState.profile.isActive) {
+    appMain.hidden = true;
+    sessionTitle.textContent = "Access Disabled";
+    sessionMeta.textContent = `${authState.profile.email} is currently inactive.`;
+    return;
+  }
+
+  appMain.hidden = false;
+  const effectivePermissions = getEffectivePermissions();
+  sessionTitle.textContent = authState.profile.displayName || authState.profile.email;
+  sessionMeta.textContent =
+    `${authState.profile.role === "admin" ? "Admin" : "Viewer"} · ` +
+    `${effectivePermissions.canWrite ? "Write access" : "Read only"} · ${authState.profile.email}`;
+}
+
+function syncPermissionUi() {
+  const writeAllowed = canCurrentUserWrite();
+  const manageUsersAllowed = isCurrentUserAdmin();
+  const editableForms = [
+    seasonForm,
+    settingsForm,
+    teamForm,
+    venueForm,
+    pitchForm,
+    slotForm,
+    winterAssignmentForm,
+    summerTrainingForm,
+  ];
+
+  editableForms.forEach((form) => toggleFormDisabled(form, !writeAllowed));
+  hideVisualPlannerBtn.disabled = !writeAllowed;
+  importInput.disabled = !writeAllowed;
+  importLabel?.classList.toggle("is-disabled", !writeAllowed);
+  toggleFormDisabled(userForm, !manageUsersAllowed);
+  refreshUsersBtn.disabled = !manageUsersAllowed;
+}
+
+function toggleFormDisabled(form, disabled) {
+  form.querySelectorAll("input, select, textarea, button").forEach((element) => {
+    element.disabled = disabled;
+  });
+}
+
+async function onSignIn(event) {
+  event.preventDefault();
+  if (!authState.enabled) return;
+
+  setAuthMessage("Signing in...", "ok");
+  const { error } = await supabaseClient.auth.signInWithPassword({
+    email: loginEmailInput.value.trim(),
+    password: loginPasswordInput.value,
+  });
+  if (error) {
+    setAuthMessage(error.message, "error");
+    return;
+  }
+
+  loginForm.reset();
+  setAuthMessage("", "ok");
+}
+
+async function onSignOut() {
+  if (!authState.enabled) return;
+  const { error } = await supabaseClient.auth.signOut();
+  if (error) {
+    setAuthMessage(error.message, "error");
+  }
+}
+
+async function refreshUserDirectory({ quiet = false } = {}) {
+  if (!authState.enabled || !isCurrentUserAdmin()) {
+    authState.users = [];
+    renderUsers();
+    return;
+  }
+
+  try {
+    const { data, error } = await supabaseClient.from("user_profiles").select("*").order("email");
+    if (error) throw error;
+    authState.users = (data || []).map(normalizeProfile);
+    renderUsers();
+    if (!quiet) setUsersMessage("Users refreshed.", "ok");
+  } catch (error) {
+    console.error("Failed to load user directory.", error);
+    if (!quiet) setUsersMessage("Unable to load users.", "error");
+  }
+}
+
+async function invokeAdminUsersFunction(body) {
+  const { data, error } = await supabaseClient.functions.invoke(HOSTED_CONFIG.adminUsersFunctionName, { body });
+  if (error) throw error;
+  if (data?.error) throw new Error(data.error);
+  return data;
+}
+
+async function onSaveUser(event) {
+  event.preventDefault();
+  if (!requireAdminAccess()) return;
+
+  const displayName = userDisplayNameInput.value.trim();
+  const email = userEmailInput.value.trim().toLowerCase();
+  const password = userPasswordInput.value;
+  const role = userRoleSelect.value === "admin" ? "admin" : "viewer";
+  const canWriteOverride = userCanWriteOverrideEnabledInput.checked ? userCanWriteOverrideInput.checked : null;
+  const tabOverrides = readUserTabOverrides();
+
+  if (!displayName || !email) {
+    setUsersMessage("Name and email are required.", "error");
+    return;
+  }
+  if (!editState.userId && !password) {
+    setUsersMessage("A password is required when adding a user.", "error");
+    return;
+  }
+
+  try {
+    const isEditing = Boolean(editState.userId);
+    setUsersMessage(editState.userId ? "Saving user..." : "Creating user...", "ok");
+    await invokeAdminUsersFunction({
+      action: editState.userId ? "update_user" : "create_user",
+      userId: editState.userId,
+      displayName,
+      email,
+      password: password || null,
+      role,
+      canWriteOverride,
+      tabOverrides,
+    });
+    await refreshUserDirectory({ quiet: true });
+    if (editState.userId === authState.user?.id) {
+      authState.profile = await loadCurrentUserProfile();
+    }
+    resetUserForm();
+    renderAll();
+    setUsersMessage(isEditing ? "User updated." : "User added.", "ok");
+  } catch (error) {
+    console.error("Failed to save user.", error);
+    setUsersMessage(error.message || "Unable to save user.", "error");
+  }
+}
+
+function resetUserForm() {
+  editState.userId = null;
+  userForm.reset();
+  renderUserTabOverrideInputs();
+  syncUserOverrideControls();
+  syncEditorButtons();
+}
+
+function setAuthMessage(text, type) {
+  authMessage.textContent = text;
+  authMessage.className = text ? `message ${type}` : "message";
+}
+
+function setUsersMessage(text, type) {
+  usersMessage.textContent = text;
+  usersMessage.className = text ? `message ${type}` : "message";
 }
 
 function getPersistenceDb() {
@@ -366,6 +865,7 @@ function toBoolean(value, fallback) {
 
 function onSaveSeason(event) {
   event.preventDefault();
+  if (!requireWriteAccess()) return;
   state.season.name = seasonNameInput.value.trim() || defaultData.season.name;
   state.season.notes = seasonNotesInput.value.trim();
   saveState();
@@ -374,6 +874,7 @@ function onSaveSeason(event) {
 
 function onSaveSettings(event) {
   event.preventDefault();
+  if (!requireWriteAccess()) return;
   state.settings.warmupMinutes = toPositiveInt(warmupMinutesInput.value, defaultData.settings.warmupMinutes);
   state.settings.packAwayMinutes = toPositiveInt(packawayMinutesInput.value, defaultData.settings.packAwayMinutes);
   state.settings.showVisualPlanner = showVisualPlannerInput.checked;
@@ -385,6 +886,7 @@ function onSaveSettings(event) {
 }
 function onSaveTeam(event) {
   event.preventDefault();
+  if (!requireWriteAccess()) return;
   const formData = new FormData(teamForm);
   const payload = {
     name: formData.get("name").toString().trim(),
@@ -424,6 +926,7 @@ function onSaveTeam(event) {
 
 function onSaveVenue(event) {
   event.preventDefault();
+  if (!requireWriteAccess()) return;
   const formData = new FormData(venueForm);
   const payload = {
     name: formData.get("name").toString().trim(),
@@ -459,6 +962,7 @@ function onSaveVenue(event) {
 
 function onSavePitch(event) {
   event.preventDefault();
+  if (!requireWriteAccess()) return;
   const formData = new FormData(pitchForm);
   const formats = Array.from(pitchForm.elements.formats.selectedOptions).map((option) => option.value);
   if (!formats.length) return setMessage("Select at least one supported format for the pitch.", "error");
@@ -521,6 +1025,7 @@ function onSavePitch(event) {
 
 function onSaveSlot(event) {
   event.preventDefault();
+  if (!requireWriteAccess()) return;
   const formData = new FormData(slotForm);
   const payload = {
     pitchId: formData.get("pitchId").toString(),
@@ -610,6 +1115,7 @@ function validateBatchMatchSlots(newSlots, existingSlots) {
 
 function renderTeams() {
   teamsBody.innerHTML = "";
+  const canWrite = canCurrentUserWrite();
   for (const team of sortTeams(state.teams)) {
     const row = document.createElement("tr");
     row.innerHTML = `
@@ -624,8 +1130,10 @@ function renderTeams() {
       <td>${escapeHtml(team.winterTrainingPreference)}</td>
       <td>${escapeHtml(team.manager)} / ${escapeHtml(team.assistantManager)}</td>
       <td class="row-actions">
-        <button class="secondary-btn" type="button" data-edit-team="${team.id}">Edit</button>
-        <button class="delete-btn" type="button" data-delete-team="${team.id}">Delete</button>
+        ${canWrite ? `
+          <button class="secondary-btn" type="button" data-edit-team="${team.id}">Edit</button>
+          <button class="delete-btn" type="button" data-delete-team="${team.id}">Delete</button>
+        ` : ""}
       </td>`;
     teamsBody.appendChild(row);
   }
@@ -635,6 +1143,7 @@ function renderTeams() {
 
 function renderVenues() {
   venuesBody.innerHTML = "";
+  const canWrite = canCurrentUserWrite();
   for (const venue of [...state.venues].sort((a, b) => a.name.localeCompare(b.name))) {
     const row = document.createElement("tr");
     row.innerHTML = `
@@ -642,8 +1151,10 @@ function renderVenues() {
       <td>${escapeHtml(String(venue.summerTrainingAreas || 0))}</td>
       <td>${escapeHtml(venue.address || "")}</td>
       <td class="row-actions">
-        <button class="secondary-btn" type="button" data-edit-venue="${venue.id}">Edit</button>
-        <button class="delete-btn" type="button" data-delete-venue="${venue.id}">Delete</button>
+        ${canWrite ? `
+          <button class="secondary-btn" type="button" data-edit-venue="${venue.id}">Edit</button>
+          <button class="delete-btn" type="button" data-delete-venue="${venue.id}">Delete</button>
+        ` : ""}
       </td>`;
     venuesBody.appendChild(row);
   }
@@ -669,6 +1180,7 @@ function renderPitchVenueOptions(selectedVenueId = pitchVenueSelect.value) {
 
 function renderPitches() {
   pitchesBody.innerHTML = "";
+  const canWrite = canCurrentUserWrite();
   for (const pitch of sortPitches(state.pitches)) {
     const venue = state.venues.find((item) => item.id === pitch.venueId);
     const overlay = pitch.overlayGroup ? ` / ${escapeHtml(pitch.overlayGroup)}` : "";
@@ -679,8 +1191,10 @@ function renderPitches() {
       <td>${escapeHtml(pitch.usage)}</td>
       <td>${escapeHtml(pitch.formats.join(", "))}${overlay}</td>
       <td class="row-actions">
-        <button class="secondary-btn" type="button" data-edit-pitch="${pitch.id}">Edit</button>
-        <button class="delete-btn" type="button" data-delete-pitch="${pitch.id}">Delete</button>
+        ${canWrite ? `
+          <button class="secondary-btn" type="button" data-edit-pitch="${pitch.id}">Edit</button>
+          <button class="delete-btn" type="button" data-delete-pitch="${pitch.id}">Delete</button>
+        ` : ""}
       </td>`;
     pitchesBody.appendChild(row);
   }
@@ -709,6 +1223,7 @@ function renderSlotPitchOptions(selectedPitchId = slotPitchSelect.value) {
 
 function renderMatchSlots() {
   slotsBody.innerHTML = "";
+  const canWrite = canCurrentUserWrite();
   for (const slot of sortMatchSlots(state.matchSlots)) {
     const pitch = state.pitches.find((item) => item.id === slot.pitchId);
     const venue = pitch ? state.venues.find((item) => item.id === pitch.venueId) : null;
@@ -720,8 +1235,10 @@ function renderMatchSlots() {
       <td>${escapeHtml(describeSlotCapacity(slot))}</td>
       <td>${escapeHtml((pitch?.formats || []).join(", ") || "No supported formats")}${slot.label ? `<div class="schedule-item__notes">Note: ${escapeHtml(slot.label)}</div>` : ""}</td>
       <td class="row-actions">
-        <button class="secondary-btn" type="button" data-edit-slot="${slot.id}">Edit</button>
-        <button class="delete-btn" type="button" data-delete-slot="${slot.id}">Delete</button>
+        ${canWrite ? `
+          <button class="secondary-btn" type="button" data-edit-slot="${slot.id}">Edit</button>
+          <button class="delete-btn" type="button" data-delete-slot="${slot.id}">Delete</button>
+        ` : ""}
       </td>`;
     slotsBody.appendChild(row);
   }
@@ -822,6 +1339,7 @@ function appendWinterTrainingBoard(time) {
 function renderWinterTrainingCell(day, time) {
   const assignments = getWinterAssignmentsForSlot(day, time);
   const areasUsed = assignments.reduce((total, assignment) => total + assignment.team.winterTrainingAreas, 0);
+  const canWrite = canCurrentUserWrite();
   return `
     <section class="venue-panel training-slot-panel">
       <h4>${escapeHtml(day)}</h4>
@@ -832,10 +1350,12 @@ function renderWinterTrainingCell(day, time) {
             <article class="schedule-item">
               <div class="schedule-item__time">${escapeHtml(assignment.team.name)}</div>
               <div class="schedule-item__meta">${escapeHtml(`${formatTrainingAreaLabel(assignment.team.winterTrainingAreas)} · prefers ${assignment.team.winterTrainingPreference}`)}</div>
-              <div class="schedule-item__actions">
-                <button class="secondary-btn" type="button" data-edit-winter="${assignment.team.id}">Edit</button>
-                <button class="delete-btn" type="button" data-delete-winter="${assignment.team.id}">Remove</button>
-              </div>
+              ${canWrite ? `
+                <div class="schedule-item__actions">
+                  <button class="secondary-btn" type="button" data-edit-winter="${assignment.team.id}">Edit</button>
+                  <button class="delete-btn" type="button" data-delete-winter="${assignment.team.id}">Remove</button>
+                </div>
+              ` : ""}
             </article>`).join("")
           : '<p class="empty-state">No teams allocated.</p>'}
       </div>
@@ -886,6 +1406,7 @@ function getWinterSlotAreasUsed(day, time, ignoreTeamId = null) {
 
 function onSaveWinterAssignment(event) {
   event.preventDefault();
+  if (!requireWriteAccess()) return;
   const formData = new FormData(winterAssignmentForm);
   const teamId = String(formData.get("teamId") || "");
   const day = String(formData.get("day") || "");
@@ -931,6 +1452,7 @@ function startEditWinterAssignment(teamId) {
 }
 
 function deleteWinterAssignment(teamId) {
+  if (!requireWriteAccess()) return;
   state.winterTrainingAssignments = state.winterTrainingAssignments.filter((assignment) => assignment.teamId !== teamId);
   if (editState.winterTeamId === teamId) resetWinterAssignmentForm();
   saveState();
@@ -948,6 +1470,7 @@ function resetWinterAssignmentForm() {
 }
 
 function autoFillWinterAssignments() {
+  if (!requireWriteAccess()) return;
   const assignedIds = new Set(state.winterTrainingAssignments.map((assignment) => assignment.teamId));
   const teamsToAssign = sortTeams(state.teams)
     .filter((team) => !assignedIds.has(team.id))
@@ -989,6 +1512,7 @@ function buildWinterCandidateSlots(team) {
 }
 
 function clearWinterAssignments() {
+  if (!requireWriteAccess()) return;
   state.winterTrainingAssignments = [];
   resetWinterAssignmentForm();
   saveState();
@@ -1044,6 +1568,53 @@ function renderSummerTrainingPlanner() {
   bindRowActions(summerTrainingBoard, "edit-summer", startEditSummerTraining);
   bindRowActions(summerTrainingBoard, "delete-summer", deleteSummerTraining);
   renderSummerTrainingVisual();
+  syncEditorButtons();
+}
+
+function renderUsers() {
+  usersBody.innerHTML = "";
+  if (!authState.enabled || !isCurrentUserAdmin()) {
+    return;
+  }
+
+  for (const profile of [...authState.users].sort((a, b) => a.email.localeCompare(b.email))) {
+    const permissions = getEffectivePermissions(profile);
+    const row = document.createElement("tr");
+    row.innerHTML = `
+      <td>${escapeHtml(profile.displayName || "Unnamed user")}</td>
+      <td>${escapeHtml(profile.email)}</td>
+      <td>${escapeHtml(profile.role === "admin" ? "Admin" : "Viewer")}</td>
+      <td>${escapeHtml(permissions.canWrite ? "Write" : "Read only")}</td>
+      <td>${escapeHtml(permissions.visibleTabs.map(getTabLabel).join(", ") || "No tabs")}</td>
+      <td class="row-actions">
+        <button class="secondary-btn" type="button" data-edit-user="${profile.userId}">Edit</button>
+      </td>`;
+    usersBody.appendChild(row);
+  }
+
+  bindRowActions(usersBody, "edit-user", startEditUser);
+}
+
+function startEditUser(userId) {
+  const profile = authState.users.find((item) => item.userId === userId);
+  if (!profile) {
+    setUsersMessage("That user could not be found.", "error");
+    return;
+  }
+
+  setActiveTab("users");
+  editState.userId = userId;
+  userDisplayNameInput.value = profile.displayName;
+  userEmailInput.value = profile.email;
+  userRoleSelect.value = profile.role;
+  userPasswordInput.value = "";
+  userCanWriteOverrideEnabledInput.checked = typeof profile.canWriteOverride === "boolean";
+  userCanWriteOverrideInput.checked =
+    typeof profile.canWriteOverride === "boolean"
+      ? profile.canWriteOverride
+      : getRoleDefaults(profile.role).canWrite;
+  renderUserTabOverrideInputs(profile.tabOverrides);
+  syncUserOverrideControls();
   syncEditorButtons();
 }
 
@@ -1118,6 +1689,7 @@ function appendSummerTrainingBoard(venue) {
 function renderSummerTrainingCell(venue, day, time) {
   const assignments = getSummerAssignmentsForSlot(venue.id, day, time);
   const areasUsed = assignments.reduce((total, assignment) => total + assignment.team.winterTrainingAreas, 0);
+  const canWrite = canCurrentUserWrite();
   return `
     <section class="venue-panel training-slot-panel">
       <h4>${escapeHtml(day)}</h4>
@@ -1128,10 +1700,12 @@ function renderSummerTrainingCell(venue, day, time) {
             <article class="schedule-item">
               <div class="schedule-item__time">${escapeHtml(assignment.team.name)}</div>
               <div class="schedule-item__meta">${escapeHtml(`${formatTrainingAreaLabel(assignment.team.winterTrainingAreas)} · prefers ${assignment.team.winterTrainingPreference}`)}</div>
-              <div class="schedule-item__actions">
-                <button class="secondary-btn" type="button" data-edit-summer="${assignment.team.id}">Edit</button>
-                <button class="delete-btn" type="button" data-delete-summer="${assignment.team.id}">Remove</button>
-              </div>
+              ${canWrite ? `
+                <div class="schedule-item__actions">
+                  <button class="secondary-btn" type="button" data-edit-summer="${assignment.team.id}">Edit</button>
+                  <button class="delete-btn" type="button" data-delete-summer="${assignment.team.id}">Remove</button>
+                </div>
+              ` : ""}
             </article>`).join("")
           : '<p class="empty-state">No teams allocated.</p>'}
       </div>
@@ -1179,6 +1753,7 @@ function renderSummerTrainingVisual() {
 
 function onSaveSummerTraining(event) {
   event.preventDefault();
+  if (!requireWriteAccess()) return;
   const formData = new FormData(summerTrainingForm);
   const teamId = String(formData.get("teamId") || "");
   const venueId = String(formData.get("venueId") || "");
@@ -1282,6 +1857,7 @@ function startEditSummerTraining(teamId) {
 }
 
 function deleteSummerTraining(teamId) {
+  if (!requireWriteAccess()) return;
   state.summerTrainingAssignments = state.summerTrainingAssignments.filter((assignment) => assignment.teamId !== teamId);
   if (editState.summerTeamId === teamId) resetSummerTrainingForm();
   saveState();
@@ -1300,6 +1876,7 @@ function resetSummerTrainingForm() {
 }
 
 function autoFillSummerAssignments() {
+  if (!requireWriteAccess()) return;
   const enabledVenues = getSummerEnabledVenues();
   if (!enabledVenues.length) return setTrainingMessage("Configure at least one summer-enabled venue first.", "error");
 
@@ -1352,6 +1929,7 @@ function buildSummerCandidateSlots(team) {
 }
 
 function clearSummerAssignments() {
+  if (!requireWriteAccess()) return;
   state.summerTrainingAssignments = [];
   resetSummerTrainingForm();
   saveState();
@@ -1572,6 +2150,7 @@ function renderVisualTimelineBlock(result, startMinutes) {
   const durationMinutes = getVisualResultDurationMinutes(result);
   const endTime = toTimeString(kickoffMinutes + durationMinutes);
   const top = minuteOffset(kickoffMinutes, startMinutes);
+  const canWrite = canCurrentUserWrite();
   const lockedTeamIds = new Set(
     result.teams
       .filter((team) => isLockedAssignment(team.id, result.slot.id))
@@ -1594,10 +2173,10 @@ function renderVisualTimelineBlock(result, startMinutes) {
       </div>
       <div class="timeline-block__teams">
         ${result.teams.map((team) => `
-          <div class="timeline-block__team${lockedTeamIds.has(team.id) ? " timeline-block__team--locked" : ""}" draggable="true" data-drag-team="${team.id}" data-origin-slot="${result.slot.id}">
+          <div class="timeline-block__team${lockedTeamIds.has(team.id) ? " timeline-block__team--locked" : ""}" draggable="${canWrite}" data-drag-team="${team.id}" data-origin-slot="${result.slot.id}">
             <strong>${escapeHtml(team.name)}</strong>
             <span>${escapeHtml(`${team.format} · ${team.matchLengthMinutes}m`)}</span>
-            ${lockedTeamIds.has(team.id) ? `
+            ${canWrite && lockedTeamIds.has(team.id) ? `
               <em class="timeline-block__team-badge">Locked</em>
               <button class="timeline-block__team-unlock" type="button" data-visual-unlock="${team.id}|${result.slot.id}" draggable="false">Unlock</button>
             ` : ""}
@@ -1857,19 +2436,22 @@ function appendPlanBoard(title, subtitle, bodyHtml) {
 function renderSlotCard(result) {
   const pitch = state.pitches.find((item) => item.id === result.slot.pitchId);
   const venue = pitch ? state.venues.find((item) => item.id === pitch.venueId) : null;
+  const canWrite = canCurrentUserWrite();
   const teamsHtml = result.teams.length
     ? result.teams.map((team) => `
         <article class="schedule-item">
           <div class="schedule-item__time">${escapeHtml(team.name)} (${escapeHtml(team.format)})</div>
           <div class="schedule-item__meta">${escapeHtml(`${team.matchLengthMinutes} mins match, ${requiredPostKickoffMinutesForTeam(team)} mins after kickoff, ${requiredMinutesForTeam(team)} mins total footprint`)}</div>
-          <div class="schedule-item__actions">
-            <button class="secondary-btn" type="button" data-open-move="${team.id}">
-              Change Slot
-            </button>
-            <button class="${isLockedAssignment(team.id, result.slot.id) ? "secondary-btn" : ""}" type="button" data-toggle-lock="${team.id}|${result.slot.id}">
-              ${isLockedAssignment(team.id, result.slot.id) ? "Unlock Slot" : "Lock Slot"}
-            </button>
-          </div>
+          ${canWrite ? `
+            <div class="schedule-item__actions">
+              <button class="secondary-btn" type="button" data-open-move="${team.id}">
+                Change Slot
+              </button>
+              <button class="${isLockedAssignment(team.id, result.slot.id) ? "secondary-btn" : ""}" type="button" data-toggle-lock="${team.id}|${result.slot.id}">
+                ${isLockedAssignment(team.id, result.slot.id) ? "Unlock Slot" : "Lock Slot"}
+              </button>
+            </div>
+          ` : ""}
         </article>`).join("")
     : `<p class="empty-state">No team assigned to this slot yet.</p>`;
   return `
@@ -1912,6 +2494,7 @@ function renderManualMoveOptions(team, currentSlotId, plan = optimiseHomeGamePla
 }
 
 function appendAssignmentMoveEditor(plan) {
+  if (!canCurrentUserWrite()) return;
   if (!plannerUiState.moveTeamId) return;
   const team = state.teams.find((item) => item.id === plannerUiState.moveTeamId);
   if (!team) {
@@ -2154,6 +2737,7 @@ function isLockedAssignment(teamId, slotId) {
 }
 
 function bindPlanLockButtons() {
+  if (!canCurrentUserWrite()) return;
   optimisedHomePlan.querySelectorAll("[data-toggle-lock]").forEach((button) => {
     button.addEventListener("click", () => {
       const [teamId, slotId] = String(button.getAttribute("data-toggle-lock") || "").split("|");
@@ -2163,6 +2747,7 @@ function bindPlanLockButtons() {
 }
 
 function bindPlanMoveButtons() {
+  if (!canCurrentUserWrite()) return;
   optimisedHomePlan.querySelectorAll("[data-open-move]").forEach((button) => {
     button.addEventListener("click", () => {
       plannerUiState.moveTeamId = String(button.getAttribute("data-open-move") || "") || null;
@@ -2185,6 +2770,7 @@ function bindPlanMoveButtons() {
 }
 
 function bindVisualPlannerDragAndDrop(plan) {
+  if (!canCurrentUserWrite()) return;
   const dragItems = visualPlanner.querySelectorAll("[data-drag-team]");
   const dropSlots = visualPlanner.querySelectorAll("[data-drop-slot]");
 
@@ -2250,6 +2836,7 @@ function clearVisualDropTargets() {
 }
 
 function bindVisualPlannerLockButtons() {
+  if (!canCurrentUserWrite()) return;
   visualPlanner.querySelectorAll("[data-visual-unlock]").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.preventDefault();
@@ -2261,6 +2848,7 @@ function bindVisualPlannerLockButtons() {
 }
 
 function unlockAssignment(teamId, slotId) {
+  if (!requireWriteAccess()) return;
   if (!teamId || !slotId) return;
   const existingIndex = state.lockedAssignments.findIndex(
     (assignment) => assignment.teamId === teamId && assignment.slotId === slotId
@@ -2274,6 +2862,7 @@ function unlockAssignment(teamId, slotId) {
 }
 
 function toggleAssignmentLock(teamId, slotId) {
+  if (!requireWriteAccess()) return;
   if (!teamId || !slotId) return;
   setActiveTab("assignments");
 
@@ -2300,6 +2889,7 @@ function toggleAssignmentLock(teamId, slotId) {
 }
 
 function moveAssignmentToSlot(teamId, slotId) {
+  if (!requireWriteAccess()) return;
   if (!teamId || !slotId) return;
 
   const team = state.teams.find((item) => item.id === teamId);
@@ -2361,6 +2951,7 @@ function canMoveTeamToSlot(teamId, slotId, plan = optimiseHomeGamePlan()) {
 }
 
 function hideVisualPlannerTab() {
+  if (!requireWriteAccess()) return;
   state.settings.showVisualPlanner = false;
   showVisualPlannerInput.checked = false;
   saveState();
@@ -2371,17 +2962,24 @@ function hideVisualPlannerTab() {
 }
 
 function syncVisualPlannerTab() {
-  const enabled = !!state.settings.showVisualPlanner;
-  visualTabButton.hidden = !enabled;
-  if (!enabled && getActiveTabName() === "visual") {
-    setActiveTab("assignments");
+  const currentActive = getActiveTabName();
+  tabButtons.forEach((button) => {
+    const tabName = button.getAttribute("data-tab-target");
+    const visible = !!tabName &&
+      userCanAccessTab(tabName) &&
+      (tabName !== "visual" || state.settings.showVisualPlanner);
+    button.hidden = !visible;
+  });
+  if (!getAccessibleTabName(currentActive)) {
+    setActiveTab("settings");
   }
 }
 
 function setActiveTab(tabName) {
-  const target = tabName === "visual" && !state.settings.showVisualPlanner
-    ? "assignments"
-    : (tabName || "settings");
+  const target = getAccessibleTabName(
+    tabName === "visual" && !state.settings.showVisualPlanner ? "assignments" : (tabName || "settings")
+  );
+  if (!target) return;
   tabButtons.forEach((button) => {
     button.classList.toggle("is-active", button.getAttribute("data-tab-target") === target);
   });
@@ -2628,14 +3226,17 @@ function syncEditorButtons() {
   slotSubmitBtn.textContent = editState.slotId ? "Save Slot Changes" : "Add Slot";
   winterSubmitBtn.textContent = editState.winterTeamId ? "Save Winter Changes" : "Assign Winter Slot";
   summerSubmitBtn.textContent = editState.summerTeamId ? "Save Summer Changes" : "Assign Summer Slot";
+  userSubmitBtn.textContent = editState.userId ? "Save User Changes" : "Add User";
   teamCancelBtn.hidden = !editState.teamId;
   venueCancelBtn.hidden = !editState.venueId;
   pitchCancelBtn.hidden = !editState.pitchId;
   slotCancelBtn.hidden = !editState.slotId;
   winterCancelBtn.hidden = !editState.winterTeamId;
   summerCancelBtn.hidden = !editState.summerTeamId;
+  userCancelBtn.hidden = !editState.userId;
 }
 function deleteTeam(teamId) {
+  if (!requireWriteAccess()) return;
   state.teams = state.teams.filter((team) => team.id !== teamId);
   state.lockedAssignments = state.lockedAssignments.filter((assignment) => assignment.teamId !== teamId);
   state.winterTrainingAssignments = state.winterTrainingAssignments.filter((assignment) => assignment.teamId !== teamId);
@@ -2654,6 +3255,7 @@ function deleteTeam(teamId) {
 }
 
 function deleteVenue(venueId) {
+  if (!requireWriteAccess()) return;
   const deletedPitchIds = state.pitches.filter((pitch) => pitch.venueId === venueId).map((pitch) => pitch.id);
   const deletedSlotIds = state.matchSlots.filter((slot) => deletedPitchIds.includes(slot.pitchId)).map((slot) => slot.id);
   state.venues = state.venues.filter((venue) => venue.id !== venueId);
@@ -2679,6 +3281,7 @@ function deleteVenue(venueId) {
 }
 
 function deletePitch(pitchId) {
+  if (!requireWriteAccess()) return;
   const deletedSlotIds = state.matchSlots.filter((slot) => slot.pitchId === pitchId).map((slot) => slot.id);
   state.pitches = state.pitches.filter((pitch) => pitch.id !== pitchId);
   state.matchSlots = state.matchSlots.filter((slot) => slot.pitchId !== pitchId);
@@ -2694,6 +3297,7 @@ function deletePitch(pitchId) {
 }
 
 function deleteMatchSlot(slotId) {
+  if (!requireWriteAccess()) return;
   state.matchSlots = state.matchSlots.filter((slot) => slot.id !== slotId);
   state.lockedAssignments = state.lockedAssignments.filter((assignment) => assignment.slotId !== slotId);
   if (editState.slotId === slotId) resetSlotForm();
@@ -2715,6 +3319,7 @@ function onExport() {
 }
 
 function onImport(event) {
+  if (!requireWriteAccess()) return;
   const file = event.target.files?.[0];
   if (!file) return;
   const reader = new FileReader();
@@ -2728,6 +3333,7 @@ function onImport(event) {
         slotId: null,
         winterTeamId: null,
         summerTeamId: null,
+        userId: null,
       });
       saveState();
       renderAll();

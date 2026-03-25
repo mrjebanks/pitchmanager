@@ -2,46 +2,79 @@
 
 Baseline release: `V1.1`
 
-A lightweight offline-first web app for managing the **2026/27** season:
-- Team setup (age group, colour, format, gender, match day, manager details)
-- Venue and pitch setup (multiple venues and pitches) with venue delete support
-- Separate slot allocation types: Summer Training, Winter Training, and Match
-- Automatic conflict detection (team, pitch, or overlay-pitch group double-booking)
-- Overlay group support for overlapping pitch layouts (only one can be used at once)
-- JSON export/import for backup and transfer
+The app now supports two operating modes:
 
-## Run Locally (Offline Test)
+- `Local mode`: no Supabase config, data stays in the browser.
+- `Hosted mode`: Supabase-backed shared data, login, admin/viewer accounts, per-user write access, and per-user tab visibility overrides.
 
-1. Open the folder:
-   - `c:\Users\banksj\OneDrive - St Mary's R.C. High School & Sports College Brownedge\Pitch management`
-2. Double-click `index.html` to run directly in a browser.
-3. Data is saved in browser local storage.
+## Current Backup
 
-Optional local server (recommended for consistent browser behavior):
+- Code snapshot archive: `backups/pitch-management-v1.1-code-2026-03-25.zip`
+- Git baseline commit: `e770296` (`chore: baseline v1.1 snapshot`)
+
+Note: browser data is still separate from the code. Use **Export Data** in the app if you want the current live planner data backed up too.
+
+## Run Locally
+
+1. Open `index.html` directly, or serve the folder with a simple local server.
+2. With the default `config.js`, the app runs in local browser-storage mode.
+
+Optional local server:
 
 ```powershell
-cd "c:\Users\banksj\OneDrive - St Mary's R.C. High School & Sports College Brownedge\Pitch management"
+cd "c:\Pitch management"
 python -m http.server 8080
 ```
 
 Then open `http://localhost:8080`.
 
-## Deploy Options
+## Recommended Hosted Stack
 
-## GitHub Pages
+- Frontend hosting: `Netlify`
+- Auth, database, and admin function: `Supabase`
 
-1. Create a GitHub repository and upload these files.
-2. In repository settings, enable **Pages** from the main branch root.
-3. Your app will be live on a public URL.
+This keeps the app static and simple to manage while adding shared login and shared data.
 
-## Netlify (drag-and-drop)
+## Supabase Setup
 
-1. Go to Netlify.
-2. Drag this folder into the deployment area.
-3. Netlify publishes instantly.
+1. Create a Supabase project.
+2. In the SQL editor, run [supabase/schema.sql](/c:/Pitch%20management/supabase/schema.sql).
+3. In `Auth -> Users`, create at least two users:
+   - one admin account
+   - one viewer account
+4. Promote the admin account in SQL:
+
+```sql
+update public.user_profiles
+set role = 'admin'
+where email = 'your-admin-email@example.com';
+```
+
+5. Deploy the Edge Function in [supabase/functions/admin-users/index.ts](/c:/Pitch%20management/supabase/functions/admin-users/index.ts).
+6. In Supabase Edge Function secrets, set:
+   - `SUPABASE_SERVICE_ROLE_KEY`
+7. Copy your project URL and anon key into [config.js](/c:/Pitch%20management/config.js).
+
+## Netlify Deploy
+
+1. Push this folder to GitHub.
+2. Create a new Netlify site from that repository.
+3. Netlify will publish the project root using [netlify.toml](/c:/Pitch%20management/netlify.toml).
+4. After deploy, confirm `config.js` contains the correct Supabase URL and anon key.
+
+## Permissions Model
+
+- Roles:
+  - `admin`: write by default, full tab access
+  - `viewer`: read-only by default
+- Per-user overrides:
+  - optional write-access override
+  - optional tab visibility override per tab
+
+The `Users` tab is admin-only.
 
 ## Notes
 
-- Use **Export Data** regularly for backups.
-- Use **Import Data** to restore or move data between devices.
-- This version is single-user and browser-based (no cloud database yet).
+- `Export Data` works in both local and hosted mode.
+- `Import Data` requires write access.
+- Hosted mode currently stores the planner as one shared JSON document in Supabase. That is fine for a small number of users, but it is still a shared document model rather than a fully normalized multi-user backend.

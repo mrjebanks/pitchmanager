@@ -673,6 +673,68 @@ td.empty-state {
   color: var(--warn);
 }
 
+.auth-shell {
+  display: grid;
+  gap: 1rem;
+  margin: 1.5rem 0;
+}
+
+.auth-card,
+.session-card {
+  margin: 0;
+}
+
+.session-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+.session-actions {
+  justify-content: flex-end;
+}
+
+.auth-form {
+  align-items: end;
+}
+
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.permissions-fieldset {
+  border: 1px solid #d7dee8;
+  border-radius: 14px;
+  padding: 1rem;
+  margin: 0;
+}
+
+.permissions-fieldset legend {
+  padding: 0 0.4rem;
+  font-weight: 700;
+}
+
+.tab-override-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.9rem;
+}
+
+.tab-override-control {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.import-label.is-disabled {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
 @media (max-width: 780px) {
   .hero {
     align-items: flex-start;
@@ -689,6 +751,12 @@ td.empty-state {
 
   .timeline-board {
     padding: 0 0.5rem 0.75rem;
+  }
+
+  .session-card,
+  .section-header {
+    flex-direction: column;
+    align-items: stretch;
   }
 }
 

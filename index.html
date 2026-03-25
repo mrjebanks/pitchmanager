@@ -19,7 +19,36 @@
     </div>
   </header>
 
-  <main>
+  <section id="auth-shell" class="auth-shell">
+    <section id="auth-card" class="card auth-card" hidden>
+      <h2>Sign In</h2>
+      <p class="overview-intro">Sign in to access the shared pitch planner.</p>
+      <form id="login-form" class="grid-2 auth-form">
+        <label>
+          Email
+          <input id="login-email" type="email" autocomplete="username" required />
+        </label>
+        <label>
+          Password
+          <input id="login-password" type="password" autocomplete="current-password" required />
+        </label>
+        <button type="submit">Sign In</button>
+      </form>
+      <p id="auth-message" class="message" aria-live="polite"></p>
+    </section>
+
+    <section id="session-panel" class="card session-card" hidden>
+      <div>
+        <h2 id="session-title">Local Mode</h2>
+        <p id="session-meta" class="overview-intro"></p>
+      </div>
+      <div class="actions-row session-actions">
+        <button id="sign-out-btn" class="secondary-btn" type="button" hidden>Sign Out</button>
+      </div>
+    </section>
+  </section>
+
+  <main id="app-main">
     <nav class="tab-nav" aria-label="Pitch manager sections">
       <button class="tab-btn is-active" type="button" data-tab-target="settings">Settings</button>
       <button class="tab-btn" type="button" data-tab-target="teams">Teams</button>
@@ -28,6 +57,7 @@
       <button class="tab-btn" type="button" data-tab-target="assignments">Match Plan</button>
       <button class="tab-btn" type="button" data-tab-target="visual" hidden>Match Visual</button>
       <button class="tab-btn" type="button" data-tab-target="training">Training</button>
+      <button class="tab-btn" type="button" data-tab-target="users" hidden>Users</button>
     </nav>
 
     <section class="tab-panel" data-tab-panel="settings">
@@ -451,8 +481,81 @@
         <div id="summer-training-visual" class="schedule-overview"></div>
       </section>
     </section>
+
+    <section class="tab-panel" data-tab-panel="users" hidden>
+      <section class="card">
+        <div class="section-header">
+          <div>
+            <h2>Users</h2>
+            <p class="overview-intro">Admins can add users, control write access, and choose tab visibility per user.</p>
+          </div>
+          <button id="refresh-users-btn" class="secondary-btn" type="button">Refresh Users</button>
+        </div>
+
+        <form id="user-form" class="grid-3">
+          <label>
+            Name
+            <input id="user-display-name" name="displayName" type="text" required />
+          </label>
+          <label>
+            Email
+            <input id="user-email" name="email" type="email" required />
+          </label>
+          <label>
+            Password
+            <input id="user-password" name="password" type="password" minlength="8" placeholder="Required for new users" />
+          </label>
+          <label>
+            Role
+            <select id="user-role" name="role" required>
+              <option value="viewer">Viewer</option>
+              <option value="admin">Admin</option>
+            </select>
+          </label>
+          <label class="toggle-field">
+            <span>Write Access Override</span>
+            <input id="user-can-write-override-enabled" name="canWriteOverrideEnabled" type="checkbox" />
+            <small>Turn this on to set write access for this user directly.</small>
+          </label>
+          <label class="toggle-field">
+            <span>Write Access</span>
+            <input id="user-can-write-override" name="canWriteOverride" type="checkbox" />
+            <small>If override is off, the user inherits write access from the role.</small>
+          </label>
+          <fieldset class="field-span-3 permissions-fieldset">
+            <legend>Tab Visibility Overrides</legend>
+            <p class="overview-intro">Leave a tab on Default to inherit it from the role. Show or Hide applies only to this user.</p>
+            <div id="user-tab-overrides" class="tab-override-grid"></div>
+          </fieldset>
+          <div class="form-actions field-span-3">
+            <button id="user-submit-btn" type="submit">Add User</button>
+            <button id="user-cancel-btn" class="secondary-btn" type="button" hidden>Cancel Edit</button>
+          </div>
+        </form>
+
+        <p id="users-message" class="message" aria-live="polite"></p>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Email</th>
+                <th>Role</th>
+                <th>Access</th>
+                <th>Visible Tabs</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="users-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
   </main>
 
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
