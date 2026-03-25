@@ -720,8 +720,32 @@ async function refreshUserDirectory({ quiet = false } = {}) {
 }
 
 async function invokeAdminUsersFunction(body) {
-  const { data, error } = await supabaseClient.functions.invoke(HOSTED_CONFIG.adminUsersFunctionName, { body });
-  if (error) throw error;
+  const {
+    data: { session },
+  } = await supabaseClient.auth.getSession();
+  const headers = session?.access_token
+    ? { Authorization: `Bearer ${session.access_token}` }
+    : {};
+  const { data, error } = await supabaseClient.functions.invoke(HOSTED_CONFIG.adminUsersFunctionName, {
+    body,
+    headers,
+  });
+  if (error) {
+    if (error.context) {
+      try {
+        const payload = await error.context.json();
+        throw new Error(payload?.error || error.message);
+      } catch {
+        try {
+          const text = await error.context.text();
+          throw new Error(text || error.message);
+        } catch {
+          throw error;
+        }
+      }
+    }
+    throw error;
+  }
   if (data?.error) throw new Error(data.error);
   return data;
 }

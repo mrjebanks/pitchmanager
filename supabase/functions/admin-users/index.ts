@@ -1,9 +1,5 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
-
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
+import { corsHeaders } from "jsr:@supabase/supabase-js@2/cors";
 
 const allowedTabs = new Set([
   "settings",
@@ -48,34 +44,40 @@ Deno.serve(async (request) => {
 
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
-    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY");
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
     const authHeader = request.headers.get("Authorization");
+    const requestApiKey =
+      request.headers.get("apikey") ||
+      Deno.env.get("SUPABASE_ANON_KEY") ||
+      Deno.env.get("SUPABASE_PUBLISHABLE_KEY");
 
-    if (!supabaseUrl || !supabaseAnonKey || !serviceRoleKey || !authHeader) {
+    if (!supabaseUrl || !serviceRoleKey || !authHeader || !requestApiKey) {
       return jsonResponse(500, { error: "Supabase function environment is incomplete." });
     }
 
     const adminClient = createClient(supabaseUrl, serviceRoleKey, {
       auth: { autoRefreshToken: false, persistSession: false },
     });
-    const userClient = createClient(supabaseUrl, supabaseAnonKey, {
+    const userClient = createClient(supabaseUrl, requestApiKey, {
       auth: { autoRefreshToken: false, persistSession: false },
       global: { headers: { Authorization: authHeader } },
     });
+    const accessToken = authHeader.replace(/^Bearer\s+/i, "").trim();
 
     const {
-      data: { user },
+      data: claimsData,
       error: authError,
-    } = await userClient.auth.getUser();
-    if (authError || !user) {
-      return jsonResponse(401, { error: "Authentication failed." });
+    } = await userClient.auth.getClaims(accessToken);
+    const userId = String(claimsData?.claims?.sub || "");
+    if (authError || !userId) {
+      console.error("Authentication failed.", authError);
+      return jsonResponse(401, { error: authError?.message || "Authentication failed." });
     }
 
     const { data: callerProfile, error: callerProfileError } = await adminClient
       .from("user_profiles")
       .select("role, is_active")
-      .eq("user_id", user.id)
+      .eq("user_id", userId)
       .maybeSingle();
     if (callerProfileError) {
       return jsonResponse(500, { error: callerProfileError.message });
