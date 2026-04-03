@@ -35,6 +35,11 @@ const HOSTED_CONFIG = {
   supabaseAnonKey: String(window.APP_CONFIG?.supabaseAnonKey || "").trim(),
   adminUsersFunctionName: String(window.APP_CONFIG?.adminUsersFunctionName || "admin-users").trim() || "admin-users",
 };
+const defaultSeasonStore = {
+  activeSeasonId: null,
+  seasons: [],
+  seasonStates: {},
+};
 
 const defaultData = {
   season: { name: "2026/27", notes: "" },
@@ -49,6 +54,7 @@ const defaultData = {
 };
 
 let state = structuredClone(defaultData);
+let seasonStore = structuredClone(defaultSeasonStore);
 let persistenceDbPromise = null;
 let supabaseClient = null;
 const editState = {
@@ -80,6 +86,9 @@ const sessionTitle = document.getElementById("session-title");
 const sessionMeta = document.getElementById("session-meta");
 const signOutBtn = document.getElementById("sign-out-btn");
 const appMain = document.getElementById("app-main");
+const seasonSelect = document.getElementById("season-select");
+const seasonNewBtn = document.getElementById("season-new-btn");
+const seasonDuplicateBtn = document.getElementById("season-duplicate-btn");
 const seasonForm = document.getElementById("season-form");
 const seasonNameInput = document.getElementById("season-name");
 const seasonNotesInput = document.getElementById("season-notes");
@@ -163,7 +172,7 @@ async function init() {
     await initialiseHostedMode();
     return;
   }
-  state = await loadState();
+  await loadState();
   authState.ready = true;
   renderAll();
 }
@@ -171,6 +180,9 @@ async function init() {
 function bindEvents() {
   loginForm.addEventListener("submit", onSignIn);
   signOutBtn.addEventListener("click", onSignOut);
+  seasonSelect.addEventListener("change", onSelectSeason);
+  seasonNewBtn.addEventListener("click", () => createSeason(false));
+  seasonDuplicateBtn.addEventListener("click", () => createSeason(true));
   seasonForm.addEventListener("submit", onSaveSeason);
   settingsForm.addEventListener("submit", onSaveSettings);
   teamForm.addEventListener("submit", onSaveTeam);
@@ -203,6 +215,7 @@ function bindEvents() {
 }
 
 function renderAll() {
+  renderSeasonOptions();
   seasonNameInput.value = state.season.name;
   seasonNotesInput.value = state.season.notes;
   warmupMinutesInput.value = state.settings.warmupMinutes;
@@ -339,6 +352,122 @@ function normalizeState(rawState = {}) {
   };
 }
 
+function createSeasonState(name = defaultData.season.name, notes = "") {
+  return normalizeState({
+    ...structuredClone(defaultData),
+    season: { name, notes },
+  });
+}
+
+function getSeasonPreferenceKey() {
+  return `gljfc-active-season-${authState.user?.id || "local"}`;
+}
+
+function rememberActiveSeason(seasonId) {
+  try {
+    localStorage.setItem(getSeasonPreferenceKey(), seasonId);
+  } catch {}
+}
+
+function getRememberedActiveSeasonId() {
+  try {
+    return localStorage.getItem(getSeasonPreferenceKey());
+  } catch {
+    return null;
+  }
+}
+
+function normalizeSeasonStore(rawStore = {}) {
+  if (Array.isArray(rawStore.seasons) && rawStore.seasonStates && typeof rawStore.seasonStates === "object") {
+    const normalizedStore = {
+      activeSeasonId: null,
+      seasons: [],
+      seasonStates: {},
+    };
+
+    rawStore.seasons.forEach((seasonId) => {
+      const normalizedId = String(seasonId || "").trim();
+      if (!normalizedId || normalizedStore.seasons.includes(normalizedId)) return;
+      normalizedStore.seasons.push(normalizedId);
+      const rawSeasonState = rawStore.seasonStates?.[normalizedId] || {};
+      normalizedStore.seasonStates[normalizedId] = normalizeState(rawSeasonState);
+    });
+
+    if (!normalizedStore.seasons.length) {
+      return createLegacySeasonStore(rawStore);
+    }
+
+    const rememberedSeasonId = String(getRememberedActiveSeasonId() || "");
+    normalizedStore.activeSeasonId = normalizedStore.seasons.includes(rememberedSeasonId)
+      ? rememberedSeasonId
+      : normalizedStore.seasons.includes(String(rawStore.activeSeasonId || ""))
+        ? String(rawStore.activeSeasonId)
+        : normalizedStore.seasons[0];
+    rememberActiveSeason(normalizedStore.activeSeasonId);
+    return normalizedStore;
+  }
+
+  return createLegacySeasonStore(rawStore);
+}
+
+function createLegacySeasonStore(rawState = {}) {
+  const legacyState = normalizeState(rawState);
+  const seasonId = String(rawState.season?.id || id("season"));
+  rememberActiveSeason(seasonId);
+  return {
+    activeSeasonId: seasonId,
+    seasons: [seasonId],
+    seasonStates: {
+      [seasonId]: legacyState,
+    },
+  };
+}
+
+function cloneCurrentState() {
+  return normalizeState(structuredClone(state));
+}
+
+function persistCurrentSeasonInStore() {
+  const seasonId = seasonStore.activeSeasonId;
+  if (!seasonId) return;
+  seasonStore.seasonStates[seasonId] = cloneCurrentState();
+  if (!seasonStore.seasons.includes(seasonId)) {
+    seasonStore.seasons.push(seasonId);
+  }
+}
+
+function applySeasonStore(nextStore) {
+  seasonStore = normalizeSeasonStore(nextStore);
+  state = normalizeState(structuredClone(seasonStore.seasonStates[seasonStore.activeSeasonId]));
+}
+
+function getSeasonStateById(seasonId) {
+  return seasonStore.seasonStates[seasonId]
+    ? normalizeState(structuredClone(seasonStore.seasonStates[seasonId]))
+    : createSeasonState();
+}
+
+function getCurrentSeasonId() {
+  return seasonStore.activeSeasonId;
+}
+
+function getSeasonDisplayName(seasonId) {
+  return seasonStore.seasonStates[seasonId]?.season?.name || "Unnamed season";
+}
+
+function renderSeasonOptions() {
+  seasonSelect.innerHTML = "";
+  seasonStore.seasons.forEach((seasonId) => {
+    const option = document.createElement("option");
+    option.value = seasonId;
+    option.textContent = getSeasonDisplayName(seasonId);
+    seasonSelect.appendChild(option);
+  });
+  if (seasonStore.seasons.includes(seasonStore.activeSeasonId)) {
+    seasonSelect.value = seasonStore.activeSeasonId;
+  }
+}
+
 async function initialiseHostedMode() {
   supabaseClient = window.supabase.createClient(HOSTED_CONFIG.supabaseUrl, HOSTED_CONFIG.supabaseAnonKey);
   supabaseClient.auth.onAuthStateChange((_event, session) => {
@@ -357,7 +486,7 @@ async function applySessionState(session) {
   authState.users = [];
 
   if (!session) {
-    state = structuredClone(defaultData);
+    applySeasonStore(createLegacySeasonStore(defaultData));
     authState.ready = true;
     renderAll();
     return;
@@ -366,12 +495,12 @@ async function applySessionState(session) {
   const profile = await loadCurrentUserProfile();
   authState.profile = profile;
   if (profile?.isActive) {
-    state = await loadState();
+    await loadState();
     if (isCurrentUserAdmin()) {
       await refreshUserDirectory({ quiet: true });
     }
   } else {
-    state = structuredClone(defaultData);
+    applySeasonStore(createLegacySeasonStore(defaultData));
   }
   authState.ready = true;
   renderAll();
@@ -485,31 +614,40 @@ async function loadState() {
   try {
     const db = await getPersistenceDb();
     const persistedState = await readPersistedState(db);
-    if (persistedState) return normalizeState(persistedState);
+    if (persistedState) {
+      applySeasonStore(persistedState);
+      return state;
+    }
 
     const migratedState = loadLegacyLocalState();
     if (migratedState) {
-      await writePersistedState(db, migratedState);
+      applySeasonStore(migratedState);
+      await writePersistedState(db, seasonStore);
       clearLegacyLocalState();
-      return migratedState;
+      return state;
     }
   } catch (error) {
     console.error("Failed to load IndexedDB state.", error);
     const migratedState = loadLegacyLocalState();
-    if (migratedState) return migratedState;
+    if (migratedState) {
+      applySeasonStore(migratedState);
+      return state;
+    }
   }
 
-  return structuredClone(defaultData);
+  applySeasonStore(createLegacySeasonStore(defaultData));
+  return state;
 }
 
 async function saveState() {
+  persistCurrentSeasonInStore();
   if (authState.enabled) {
     await saveRemoteState();
     return;
   }
   try {
     const db = await getPersistenceDb();
-    await writePersistedState(db, state);
+    await writePersistedState(db, seasonStore);
   } catch (error) {
     console.error("Failed to save IndexedDB state.", error);
   }
@@ -523,12 +661,17 @@ async function loadRemoteState() {
       .eq("id", REMOTE_STATE_RECORD_ID)
       .maybeSingle();
     if (error) throw error;
-    if (!data?.data || !Object.keys(data.data).length) return structuredClone(defaultData);
-    return normalizeState(data.data);
+    if (!data?.data || !Object.keys(data.data).length) {
+      applySeasonStore(createLegacySeasonStore(defaultData));
+      return state;
+    }
+    applySeasonStore(data.data);
+    return state;
   } catch (error) {
     console.error("Failed to load Supabase state.", error);
     setMessage("Unable to load shared data from Supabase.", "error");
-    return structuredClone(defaultData);
+    applySeasonStore(createLegacySeasonStore(defaultData));
+    return state;
   }
 }
 
@@ -537,7 +680,7 @@ async function saveRemoteState() {
   try {
     const { error } = await supabaseClient.from("app_state").upsert({
       id: REMOTE_STATE_RECORD_ID,
-      data: state,
+      data: seasonStore,
       updated_by: authState.user?.id || null,
     });
     if (error) throw error;
@@ -661,6 +804,9 @@ function syncPermissionUi() {
   ];
 
   editableForms.forEach((form) => toggleFormDisabled(form, !writeAllowed));
+  seasonSelect.disabled = seasonStore.seasons.length < 2;
+  seasonNewBtn.disabled = !writeAllowed;
+  seasonDuplicateBtn.disabled = !writeAllowed;
   hideVisualPlannerBtn.disabled = !writeAllowed;
   importInput.disabled = !writeAllowed;
   importLabel?.classList.toggle("is-disabled", !writeAllowed);
@@ -860,7 +1006,7 @@ function loadLegacyLocalState() {
     const raw = localStorage.getItem(storageKey);
     if (!raw) continue;
     try {
-      return normalizeState(JSON.parse(raw));
+      return JSON.parse(raw);
     } catch {
       return structuredClone(defaultData);
     }
@@ -887,12 +1033,58 @@ function toBoolean(value, fallback) {
   return typeof value === "boolean" ? value : fallback;
 }
 
+async function onSelectSeason() {
+  const nextSeasonId = String(seasonSelect.value || "");
+  if (!nextSeasonId || nextSeasonId === getCurrentSeasonId()) return;
+
+  persistCurrentSeasonInStore();
+  seasonStore.activeSeasonId = nextSeasonId;
+  rememberActiveSeason(nextSeasonId);
+  state = getSeasonStateById(nextSeasonId);
+  await saveState();
+  renderAll();
+  setActiveTab("settings");
+  setMessage(`Season opened: ${state.season.name}`, "ok");
+}
+
+async function createSeason(duplicateCurrent) {
+  if (!requireWriteAccess()) return;
+
+  const suggestedName = duplicateCurrent
+    ? `${state.season.name} Copy`
+    : defaultData.season.name;
+  const seasonName = window.prompt(
+    duplicateCurrent ? "New season name for the duplicated season:" : "New season name:",
+    suggestedName
+  )?.trim();
+  if (!seasonName) return;
+
+  persistCurrentSeasonInStore();
+  const seasonId = id("season");
+  const nextState = duplicateCurrent ? cloneCurrentState() : createSeasonState();
+  nextState.season.name = seasonName;
+  if (!duplicateCurrent) {
+    nextState.season.notes = "";
+  }
+
+  seasonStore.seasons.push(seasonId);
+  seasonStore.seasonStates[seasonId] = nextState;
+  seasonStore.activeSeasonId = seasonId;
+  rememberActiveSeason(seasonId);
+  state = getSeasonStateById(seasonId);
+  await saveState();
+  renderAll();
+  setActiveTab("settings");
+  setMessage(duplicateCurrent ? `Season duplicated: ${seasonName}` : `Season created: ${seasonName}`, "ok");
+}
+
 function onSaveSeason(event) {
   event.preventDefault();
   if (!requireWriteAccess()) return;
   state.season.name = seasonNameInput.value.trim() || defaultData.season.name;
   state.season.notes = seasonNotesInput.value.trim();
   saveState();
+  renderSeasonOptions();
   setMessage(`Season saved: ${state.season.name}`, "ok");
 }
 
@@ -3349,7 +3541,13 @@ function onImport(event) {
   const reader = new FileReader();
   reader.onload = () => {
     try {
-      state = normalizeState(JSON.parse(reader.result.toString()));
+      const imported = JSON.parse(reader.result.toString());
+      if (Array.isArray(imported?.seasons) && imported?.seasonStates && typeof imported.seasonStates === "object") {
+        const importedSeasonId = imported.activeSeasonId || imported.seasons[0];
+        state = normalizeState(imported.seasonStates?.[importedSeasonId] || {});
+      } else {
+        state = normalizeState(imported);
+      }
       Object.assign(editState, {
         teamId: null,
         venueId: null,
@@ -3361,7 +3559,7 @@ function onImport(event) {
       });
       saveState();
       renderAll();
-      setMessage("Data imported.", "ok");
+      setMessage(`Data imported into ${state.season.name}.`, "ok");
     } catch {
       setMessage("Import failed. Please select a valid JSON export file.", "error");
     }

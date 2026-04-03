@@ -711,6 +711,18 @@ td.empty-state {
   margin-bottom: 1rem;
 }
 
+.season-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.season-actions {
+  justify-content: flex-end;
+}
+
 .permissions-fieldset {
   border: 1px solid #d7dee8;
   border-radius: 14px;
@@ -758,7 +770,8 @@ td.empty-state {
   }
 
   .session-card,
-  .section-header {
+  .section-header,
+  .season-toolbar {
     flex-direction: column;
     align-items: stretch;
   }
