@@ -1585,8 +1585,14 @@ function renderWinterTeamOptions(selectedTeamId = winterTeamSelect.value) {
     winterTeamSelect.disabled = true;
     return;
   }
+  const availableTeams = getAvailableTrainingTeams(state.winterTrainingAssignments, selectedTeamId);
+  if (!availableTeams.length) {
+    winterTeamSelect.innerHTML = `<option value="">All teams already assigned</option>`;
+    winterTeamSelect.disabled = true;
+    return;
+  }
   winterTeamSelect.disabled = false;
-  for (const team of sortTeams(state.teams)) {
+  for (const team of availableTeams) {
     const option = document.createElement("option");
     option.value = team.id;
     option.textContent = `${formatTeamDisplayName(team)} (${formatTrainingAreaLabel(team.winterTrainingAreas)} / prefers ${team.winterTrainingPreference})`;
@@ -1743,8 +1749,14 @@ function renderSummerTeamOptions(selectedTeamId = summerTeamSelect.value) {
     summerTeamSelect.disabled = true;
     return;
   }
+  const availableTeams = getAvailableTrainingTeams(state.summerTrainingAssignments, selectedTeamId);
+  if (!availableTeams.length) {
+    summerTeamSelect.innerHTML = `<option value="">All teams already assigned</option>`;
+    summerTeamSelect.disabled = true;
+    return;
+  }
   summerTeamSelect.disabled = false;
-  for (const team of sortTeams(state.teams)) {
+  for (const team of availableTeams) {
     const option = document.createElement("option");
     option.value = team.id;
     option.textContent = `${formatTeamDisplayName(team)} (${formatTrainingAreaLabel(team.winterTrainingAreas)} / prefers ${team.winterTrainingPreference})`;
@@ -3683,6 +3695,15 @@ function normalizeWinterTrainingPreference(value) {
 
 function formatTrainingAreaLabel(count) {
   return `${count} area${count === 1 ? "" : "s"}`;
+}
+
+function getAvailableTrainingTeams(assignments, selectedTeamId = "") {
+  const assignedIds = new Set(
+    assignments
+      .map((assignment) => assignment.teamId)
+      .filter((teamId) => teamId && teamId !== selectedTeamId)
+  );
+  return sortTeams(state.teams.filter((team) => !assignedIds.has(team.id)));
 }
 
 function formatTeamDisplayName(team) {
