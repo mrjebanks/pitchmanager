@@ -1589,7 +1589,7 @@ function renderWinterTeamOptions(selectedTeamId = winterTeamSelect.value) {
   for (const team of sortTeams(state.teams)) {
     const option = document.createElement("option");
     option.value = team.id;
-    option.textContent = `${team.name} (${formatTrainingAreaLabel(team.winterTrainingAreas)} / prefers ${team.winterTrainingPreference})`;
+    option.textContent = `${formatTeamDisplayName(team)} (${formatTrainingAreaLabel(team.winterTrainingAreas)} / prefers ${team.winterTrainingPreference})`;
     winterTeamSelect.appendChild(option);
   }
   if (state.teams.some((team) => team.id === selectedTeamId)) {
@@ -1747,7 +1747,7 @@ function renderSummerTeamOptions(selectedTeamId = summerTeamSelect.value) {
   for (const team of sortTeams(state.teams)) {
     const option = document.createElement("option");
     option.value = team.id;
-    option.textContent = `${team.name} (${formatTrainingAreaLabel(team.winterTrainingAreas)} / prefers ${team.winterTrainingPreference})`;
+    option.textContent = `${formatTeamDisplayName(team)} (${formatTrainingAreaLabel(team.winterTrainingAreas)} / prefers ${team.winterTrainingPreference})`;
     summerTeamSelect.appendChild(option);
   }
   if (state.teams.some((team) => team.id === selectedTeamId)) summerTeamSelect.value = selectedTeamId;
@@ -3683,6 +3683,13 @@ function normalizeWinterTrainingPreference(value) {
 
 function formatTrainingAreaLabel(count) {
   return `${count} area${count === 1 ? "" : "s"}`;
+}
+
+function formatTeamDisplayName(team) {
+  if (!team) return "";
+  const name = String(team.name || "").trim();
+  const colour = String(team.colour || "").trim();
+  return colour ? `${name} ${colour}` : name;
 }
 
 function kickoffPreferenceScore(team, slot) {
