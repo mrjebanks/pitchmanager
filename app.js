@@ -1527,7 +1527,7 @@ function appendWinterTrainingSummary() {
           ${unassignedTeams.length
             ? unassignedTeams.map((team) => `
               <article class="schedule-item warning-item">
-                <div class="schedule-item__time">${escapeHtml(team.name)} (${escapeHtml(team.format)})</div>
+                <div class="schedule-item__time">${escapeHtml(formatTeamDisplayName(team))} (${escapeHtml(team.format)})</div>
                 <div class="schedule-item__meta">${escapeHtml(`${formatTrainingAreaLabel(team.winterTrainingAreas)} · prefers ${team.winterTrainingPreference}`)}</div>
               </article>`).join("")
             : '<article class="schedule-item"><div class="schedule-item__time">All teams assigned</div><div class="schedule-item__meta">Winter training slots are currently filled.</div></article>'}
@@ -1564,7 +1564,7 @@ function renderWinterTrainingCell(day, time) {
         ${assignments.length
           ? assignments.map((assignment) => `
             <article class="schedule-item">
-              <div class="schedule-item__time">${escapeHtml(assignment.team.name)}</div>
+              <div class="schedule-item__time">${escapeHtml(formatTeamDisplayName(assignment.team))}</div>
               <div class="schedule-item__meta">${escapeHtml(`${formatTrainingAreaLabel(assignment.team.winterTrainingAreas)} · prefers ${assignment.team.winterTrainingPreference}`)}</div>
               ${canWrite ? `
                 <div class="schedule-item__actions">
@@ -1878,7 +1878,7 @@ function appendSummerTrainingSummary() {
           ${unassignedTeams.length
             ? unassignedTeams.map((team) => `
               <article class="schedule-item warning-item">
-                <div class="schedule-item__time">${escapeHtml(team.name)} (${escapeHtml(team.format)})</div>
+                <div class="schedule-item__time">${escapeHtml(formatTeamDisplayName(team))} (${escapeHtml(team.format)})</div>
                 <div class="schedule-item__meta">${escapeHtml(`${formatTrainingAreaLabel(team.winterTrainingAreas)} · prefers ${team.winterTrainingPreference}`)}</div>
               </article>`).join("")
             : '<article class="schedule-item"><div class="schedule-item__time">All teams assigned</div><div class="schedule-item__meta">Summer training slots are currently filled.</div></article>'}
@@ -1926,7 +1926,7 @@ function renderSummerTrainingCell(venue, day, time) {
         ${assignments.length
           ? assignments.map((assignment) => `
             <article class="schedule-item">
-              <div class="schedule-item__time">${escapeHtml(assignment.team.name)}</div>
+              <div class="schedule-item__time">${escapeHtml(formatTeamDisplayName(assignment.team))}</div>
               <div class="schedule-item__meta">${escapeHtml(`${formatTrainingAreaLabel(assignment.team.winterTrainingAreas)} · prefers ${assignment.team.winterTrainingPreference}`)}</div>
               ${canWrite ? `
                 <div class="schedule-item__actions">
@@ -2193,7 +2193,7 @@ function renderTrainingVisualCell(assignments, areasUsed, capacity) {
       ${assignments.length
         ? assignments.map((assignment) => `
           <div class="training-visual-team">
-            <strong>${escapeHtml(assignment.team.name)}</strong>
+            <strong>${escapeHtml(formatTeamDisplayName(assignment.team))}</strong>
             <small>${escapeHtml(`${formatTrainingAreaLabel(assignment.team.winterTrainingAreas)} · prefers ${assignment.team.winterTrainingPreference}`)}</small>
           </div>`).join("")
         : '<span class="empty-state">No teams allocated.</span>'}
