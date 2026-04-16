@@ -470,11 +470,11 @@ small {
 }
 
 .friendly-day-board__slot.is-available {
-  background: #f7fbf8;
+  background: #fff;
 }
 
 .friendly-day-board__slot.is-booked {
-  background: rgba(14, 122, 103, 0.12);
+  background: #fff;
 }
 
 .friendly-day-board__slot.is-blocked {
