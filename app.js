@@ -8,6 +8,9 @@ const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
 const WINTER_TRAINING_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
 const WINTER_TRAINING_TIMES = ["18:00", "19:00", "20:00"];
 const TIMELINE_PIXELS_PER_HOUR = 88;
+const FRIENDLY_DAY_START_MINUTES = 8 * 60;
+const FRIENDLY_DAY_END_MINUTES = 22 * 60;
+const FRIENDLY_DAY_SLOT_MINUTES = 30;
 const REMOTE_STATE_RECORD_ID = "current";
 const TAB_DEFINITIONS = [
   { id: "settings", label: "Settings" },
@@ -130,6 +133,7 @@ const friendlyCalendarMonthInput = document.getElementById("friendly-calendar-mo
 const friendlySubmitBtn = document.getElementById("friendly-submit-btn");
 const friendlyCancelBtn = document.getElementById("friendly-cancel-btn");
 const friendlyMessage = document.getElementById("friendly-message");
+const friendlyDayBoard = document.getElementById("friendly-day-board");
 const friendlyCalendar = document.getElementById("friendly-calendar");
 const plannerMessage = document.getElementById("planner-message");
 const trainingMessage = document.getElementById("training-message");
@@ -212,6 +216,7 @@ function bindEvents() {
   friendlyBookingForm.addEventListener("submit", onSaveFriendlyBooking);
   friendlyCancelBtn.addEventListener("click", resetFriendlyBookingForm);
   friendlyTeamSelect.addEventListener("change", () => renderFriendlyPitchOptions());
+  friendlyDateInput.addEventListener("change", onFriendlyDateChange);
   friendlyCalendarMonthInput.addEventListener("change", renderFriendlyCalendar);
   winterAssignmentForm.addEventListener("submit", onSaveWinterAssignment);
   summerTrainingForm.addEventListener("submit", onSaveSummerTraining);
@@ -1528,8 +1533,16 @@ function renderFriendlyBookingPlanner() {
   if (!friendlyDateInput.value) friendlyDateInput.value = toDateInputValue(new Date());
   if (!friendlyKickoffInput.value) friendlyKickoffInput.value = "10:00";
   if (!friendlyCalendarMonthInput.value) friendlyCalendarMonthInput.value = toMonthInputValue(new Date());
+  renderFriendlyDayBoard();
   renderFriendlyCalendar();
   syncEditorButtons();
+}
+
+function onFriendlyDateChange() {
+  const date = normalizeDateInput(friendlyDateInput.value);
+  if (date) friendlyCalendarMonthInput.value = date.slice(0, 7);
+  renderFriendlyDayBoard();
+  renderFriendlyCalendar();
 }
 
 function renderFriendlyTeamOptions(selectedTeamId = friendlyTeamSelect.value) {
@@ -1697,6 +1710,121 @@ function getFriendlyBookingDetails(booking) {
   return { team, pitch, endTime };
 }
 
+function renderFriendlyDayBoard() {
+  if (!friendlyDayBoard) return;
+  const selectedDate = normalizeDateInput(friendlyDateInput.value) || toDateInputValue(new Date());
+  const matchPitches = sortPitches(state.pitches.filter(isMatchCapablePitch));
+  const dayBookings = state.friendlyBookings
+    .filter((booking) => booking.date === selectedDate)
+    .sort((a, b) => a.kickoffTime.localeCompare(b.kickoffTime));
+
+  if (!matchPitches.length) {
+    friendlyDayBoard.innerHTML = `<p class="empty-state">Add match-capable pitches in Venue Pitches to build the daily availability board.</p>`;
+    return;
+  }
+
+  const slots = buildFriendlyDaySlots();
+  const gridTemplate = `minmax(170px, 220px) repeat(${slots.length}, minmax(34px, 1fr))`;
+  friendlyDayBoard.innerHTML = `
+    <section class="friendly-day-board__panel">
+      <div class="friendly-day-board__header">
+        <h3>${escapeHtml(formatDateLabel(selectedDate))}</h3>
+      </div>
+      <div class="friendly-day-board__scroll">
+        <div class="friendly-day-board__grid">
+          <div class="friendly-day-board__time-row" style="grid-template-columns: ${gridTemplate};">
+            <div class="friendly-day-board__pitch-heading">Pitch</div>
+            ${slots.map((slot) => `
+              <div class="friendly-day-board__time${slot.minutes % 60 === 0 ? "" : " is-half-hour"}">
+                ${slot.minutes % 60 === 0 ? escapeHtml(slot.label) : ""}
+              </div>
+            `).join("")}
+          </div>
+          ${matchPitches.map((pitch) => renderFriendlyPitchDayRow(pitch, slots, dayBookings, gridTemplate)).join("")}
+        </div>
+      </div>
+    </section>
+  `;
+  bindRowActions(friendlyDayBoard, "edit-friendly", startEditFriendlyBooking);
+  bindRowActions(friendlyDayBoard, "delete-friendly", deleteFriendlyBooking);
+}
+
+function buildFriendlyDaySlots() {
+  const slots = [];
+  for (let minutes = FRIENDLY_DAY_START_MINUTES; minutes < FRIENDLY_DAY_END_MINUTES; minutes += FRIENDLY_DAY_SLOT_MINUTES) {
+    slots.push({ minutes, label: toTimeString(minutes) });
+  }
+  return slots;
+}
+
+function renderFriendlyPitchDayRow(pitch, slots, dayBookings, gridTemplate) {
+  const pitchBookings = dayBookings.filter((booking) => {
+    const bookingPitch = state.pitches.find((item) => item.id === booking.pitchId);
+    return bookingPitch && pitchesSharePhysicalSpace(pitch, bookingPitch);
+  });
+  const exactPitchBookings = pitchBookings.filter((booking) => booking.pitchId === pitch.id);
+
+  return `
+    <div class="friendly-day-board__row" style="grid-template-columns: ${gridTemplate};">
+      <div class="friendly-day-board__pitch-label">
+        <strong>${escapeHtml(pitch.name)}</strong>
+        <span>${escapeHtml(getVenueName(pitch.venueId))}</span>
+        <small>${escapeHtml(pitch.formats.join(", "))}${pitch.overlayGroup ? ` / ${escapeHtml(pitch.overlayGroup)}` : ""}</small>
+      </div>
+      ${slots.map((slot) => {
+        const marker = getFriendlyPitchSlotMarker(pitch, slot.minutes, pitchBookings);
+        return `<div class="friendly-day-board__slot ${marker}" title="${escapeHtml(describeFriendlyPitchSlotMarker(marker))}"></div>`;
+      }).join("")}
+      ${exactPitchBookings.map((booking) => renderFriendlyDayBookingBlock(booking)).join("")}
+    </div>
+  `;
+}
+
+function getFriendlyPitchSlotMarker(pitch, slotStart, pitchBookings) {
+  const slotEnd = slotStart + FRIENDLY_DAY_SLOT_MINUTES;
+  const conflict = pitchBookings.find((booking) => {
+    const bookingPitch = state.pitches.find((item) => item.id === booking.pitchId);
+    const bookingStart = toClockMinutes(booking.kickoffTime);
+    if (!bookingPitch || !Number.isFinite(bookingStart)) return false;
+    return timesOverlap(slotStart, slotEnd, bookingStart, bookingStart + booking.durationMinutes);
+  });
+  if (!conflict) return "is-available";
+  return conflict.pitchId === pitch.id ? "is-booked" : "is-blocked";
+}
+
+function describeFriendlyPitchSlotMarker(marker) {
+  if (marker === "is-booked") return "Booked";
+  if (marker === "is-blocked") return "Unavailable because an overlayed pitch is booked";
+  return "Available";
+}
+
+function renderFriendlyDayBookingBlock(booking) {
+  const { team, endTime } = getFriendlyBookingDetails(booking);
+  const startMinutes = toClockMinutes(booking.kickoffTime);
+  if (!Number.isFinite(startMinutes)) return "";
+
+  const clampedStart = Math.max(startMinutes, FRIENDLY_DAY_START_MINUTES);
+  const clampedEnd = Math.min(startMinutes + booking.durationMinutes, FRIENDLY_DAY_END_MINUTES);
+  if (clampedEnd <= FRIENDLY_DAY_START_MINUTES || clampedStart >= FRIENDLY_DAY_END_MINUTES) return "";
+
+  const startIndex = Math.floor((clampedStart - FRIENDLY_DAY_START_MINUTES) / FRIENDLY_DAY_SLOT_MINUTES);
+  const endIndex = Math.ceil((clampedEnd - FRIENDLY_DAY_START_MINUTES) / FRIENDLY_DAY_SLOT_MINUTES);
+  const canWrite = canCurrentUserWrite();
+  const opponent = booking.opponent ? ` v ${booking.opponent}` : "";
+  return `
+    <article class="friendly-day-board__booking" style="grid-column: ${startIndex + 2} / ${endIndex + 2};">
+      <strong>${escapeHtml(booking.kickoffTime)}-${escapeHtml(endTime)}</strong>
+      <span>${escapeHtml(formatTeamDisplayName(team) || "Deleted team")}${escapeHtml(opponent)}</span>
+      ${canWrite ? `
+        <div class="friendly-day-board__actions">
+          <button class="secondary-btn" type="button" data-edit-friendly="${booking.id}">Edit</button>
+          <button class="delete-btn" type="button" data-delete-friendly="${booking.id}">Delete</button>
+        </div>
+      ` : ""}
+    </article>
+  `;
+}
+
 function renderFriendlyCalendar() {
   if (!friendlyCalendar) return;
   const monthValue = friendlyCalendarMonthInput.value || toMonthInputValue(new Date());
@@ -1712,6 +1840,7 @@ function renderFriendlyCalendar() {
   const startOffset = (firstOfMonth.getDay() + 6) % 7;
   const firstGridDay = new Date(year, monthIndex, 1 - startOffset);
   const bookingsByDate = groupFriendlyBookingsByDate(monthValue);
+  const selectedDate = normalizeDateInput(friendlyDateInput.value);
 
   const dayNameHtml = DAYS.map((day) => `<div class="friendly-calendar__day-name">${escapeHtml(day.slice(0, 3))}</div>`).join("");
   const cells = [];
@@ -1722,8 +1851,8 @@ function renderFriendlyCalendar() {
     const isOutside = cellDate.getMonth() !== monthIndex;
     const bookings = bookingsByDate.get(dateKey) || [];
     cells.push(`
-      <div class="friendly-calendar__cell${isOutside ? " is-outside" : ""}">
-        <div class="friendly-calendar__date">${cellDate.getDate()}</div>
+      <div class="friendly-calendar__cell${isOutside ? " is-outside" : ""}${dateKey === selectedDate ? " is-selected" : ""}">
+        <button class="friendly-calendar__date" type="button" data-select-friendly-date="${dateKey}">${cellDate.getDate()}</button>
         ${bookings.map(renderFriendlyBookingCard).join("")}
       </div>
     `);
@@ -1739,6 +1868,16 @@ function renderFriendlyCalendar() {
   `;
   bindRowActions(friendlyCalendar, "edit-friendly", startEditFriendlyBooking);
   bindRowActions(friendlyCalendar, "delete-friendly", deleteFriendlyBooking);
+  bindRowActions(friendlyCalendar, "select-friendly-date", selectFriendlyDate);
+}
+
+function selectFriendlyDate(date) {
+  const selectedDate = normalizeDateInput(date);
+  if (!selectedDate) return;
+  friendlyDateInput.value = selectedDate;
+  friendlyCalendarMonthInput.value = selectedDate.slice(0, 7);
+  renderFriendlyDayBoard();
+  renderFriendlyCalendar();
 }
 
 function groupFriendlyBookingsByDate(monthValue) {
@@ -4336,6 +4475,7 @@ function startEditFriendlyBooking(bookingId) {
   friendlyOpponentInput.value = booking.opponent || "";
   friendlyNotesInput.value = booking.notes || "";
   friendlyCalendarMonthInput.value = booking.date.slice(0, 7);
+  renderFriendlyDayBoard();
   renderFriendlyCalendar();
   syncEditorButtons();
 }
@@ -4363,6 +4503,7 @@ function resetFriendlyBookingForm({ keepMessage = false } = {}) {
   friendlyKickoffInput.value = "10:00";
   renderFriendlyTeamOptions();
   renderFriendlyPitchOptions();
+  renderFriendlyDayBoard();
   syncEditorButtons();
   if (!keepMessage) setFriendlyMessage("", "ok");
 }
@@ -4586,6 +4727,18 @@ function toMonthInputValue(date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
   return `${year}-${month}`;
+}
+
+function formatDateLabel(value) {
+  const normalized = normalizeDateInput(value);
+  if (!normalized) return "";
+  const [year, month, day] = normalized.split("-").map(Number);
+  return new Date(year, month - 1, day).toLocaleDateString("en-GB", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
 }
 
 function sortTeams(teams) {
