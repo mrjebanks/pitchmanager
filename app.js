@@ -72,7 +72,7 @@ const editState = {
   summerTeamId: null,
   userId: null,
 };
-const plannerUiState = { moveTeamId: null, dragTeamId: null };
+const plannerUiState = { moveTeamId: null, dragTeamId: null, friendlyPendingPitchId: null };
 const authState = {
   enabled: Boolean(HOSTED_CONFIG.supabaseUrl && HOSTED_CONFIG.supabaseAnonKey && window.supabase?.createClient),
   ready: false,
@@ -215,7 +215,10 @@ function bindEvents() {
   slotForm.addEventListener("submit", onSaveSlot);
   friendlyBookingForm.addEventListener("submit", onSaveFriendlyBooking);
   friendlyCancelBtn.addEventListener("click", resetFriendlyBookingForm);
-  friendlyTeamSelect.addEventListener("change", () => renderFriendlyPitchOptions());
+  friendlyTeamSelect.addEventListener("change", () => renderFriendlyPitchOptions(plannerUiState.friendlyPendingPitchId || friendlyPitchSelect.value));
+  friendlyPitchSelect.addEventListener("change", () => {
+    plannerUiState.friendlyPendingPitchId = friendlyPitchSelect.value || null;
+  });
   friendlyDateInput.addEventListener("change", onFriendlyDateChange);
   friendlyCalendarMonthInput.addEventListener("change", renderFriendlyCalendar);
   winterAssignmentForm.addEventListener("submit", onSaveWinterAssignment);
@@ -1595,6 +1598,7 @@ function renderFriendlyPitchOptions(selectedPitchId = friendlyPitchSelect.value)
   }
   if (matchPitches.some((pitch) => pitch.id === selectedPitchId)) {
     friendlyPitchSelect.value = selectedPitchId;
+    plannerUiState.friendlyPendingPitchId = selectedPitchId;
   }
 }
 
@@ -1752,6 +1756,7 @@ function renderFriendlyDayBoard() {
   `;
   bindRowActions(friendlyDayBoard, "edit-friendly", startEditFriendlyBooking);
   bindRowActions(friendlyDayBoard, "delete-friendly", deleteFriendlyBooking);
+  bindRowActions(friendlyDayBoard, "select-friendly-slot", selectFriendlySlot);
 }
 
 function buildFriendlyDaySlots() {
@@ -1778,7 +1783,13 @@ function renderFriendlyPitchDayRow(pitch, slots, dayBookings, gridTemplate) {
       </div>
       ${slots.map((slot) => {
         const marker = getFriendlyPitchSlotMarker(pitch, slot.minutes, pitchBookings);
-        return `<div class="friendly-day-board__slot ${marker}" title="${escapeHtml(describeFriendlyPitchSlotMarker(marker))}"></div>`;
+        const title = marker === "is-available"
+          ? `Select ${pitch.name} at ${slot.label}`
+          : describeFriendlyPitchSlotMarker(marker);
+        if (marker === "is-available") {
+          return `<button class="friendly-day-board__slot ${marker}" type="button" data-select-friendly-slot="${pitch.id}|${slot.label}" title="${escapeHtml(title)}"></button>`;
+        }
+        return `<div class="friendly-day-board__slot ${marker}" title="${escapeHtml(title)}"></div>`;
       }).join("")}
       ${exactPitchBookings.map((booking) => renderFriendlyDayBookingBlock(booking)).join("")}
     </div>
@@ -1883,6 +1894,28 @@ function selectFriendlyDate(date) {
   friendlyCalendarMonthInput.value = selectedDate.slice(0, 7);
   renderFriendlyDayBoard();
   renderFriendlyCalendar();
+}
+
+function selectFriendlySlot(value) {
+  if (!canCurrentUserWrite()) return;
+  const [pitchId, kickoffTime] = String(value || "").split("|");
+  const pitch = state.pitches.find((item) => item.id === pitchId);
+  const time = normalizeTimeInput(kickoffTime);
+  if (!pitch || !time) return;
+
+  plannerUiState.friendlyPendingPitchId = pitchId;
+  if (!friendlyDateInput.value) friendlyDateInput.value = toDateInputValue(new Date());
+  friendlyKickoffInput.value = time;
+  renderFriendlyPitchOptions(pitchId);
+
+  const canSelectPitch = !friendlyPitchSelect.disabled &&
+    Array.from(friendlyPitchSelect.options).some((option) => option.value === pitchId);
+  if (canSelectPitch) {
+    friendlyPitchSelect.value = pitchId;
+    setFriendlyMessage(`${pitch.name} selected at ${time}.`, "ok");
+  } else {
+    setFriendlyMessage(`${pitch.name} at ${time} selected. Choose a compatible team to complete the pitch selection.`, "ok");
+  }
 }
 
 function groupFriendlyBookingsByDate(monthValue) {
@@ -4472,6 +4505,7 @@ function startEditFriendlyBooking(bookingId) {
   if (!booking) return setFriendlyMessage("That friendly booking could not be found.", "error");
   setActiveTab("friendlies");
   editState.friendlyBookingId = bookingId;
+  plannerUiState.friendlyPendingPitchId = booking.pitchId;
   renderFriendlyTeamOptions(booking.teamId);
   renderFriendlyPitchOptions(booking.pitchId);
   friendlyDateInput.value = booking.date;
@@ -4502,6 +4536,7 @@ function resetPitchForm() { editState.pitchId = null; pitchForm.reset(); renderP
 function resetSlotForm() { editState.slotId = null; slotForm.reset(); renderSlotPitchOptions(); syncEditorButtons(); }
 function resetFriendlyBookingForm({ keepMessage = false } = {}) {
   editState.friendlyBookingId = null;
+  plannerUiState.friendlyPendingPitchId = null;
   friendlyBookingForm.reset();
   friendlyDurationSelect.value = "90";
   friendlyDateInput.value = toDateInputValue(new Date());
