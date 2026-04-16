@@ -142,7 +142,8 @@ const friendlySubmitBtn = document.getElementById("friendly-submit-btn");
 const friendlyCancelBtn = document.getElementById("friendly-cancel-btn");
 const pitchBlockForm = document.getElementById("pitch-block-form");
 const pitchBlockPitchSelect = document.getElementById("pitch-block-pitch");
-const pitchBlockDateInput = document.getElementById("pitch-block-date");
+const pitchBlockStartDateInput = document.getElementById("pitch-block-start-date");
+const pitchBlockEndDateInput = document.getElementById("pitch-block-end-date");
 const pitchBlockStartInput = document.getElementById("pitch-block-start");
 const pitchBlockEndInput = document.getElementById("pitch-block-end");
 const pitchBlockReasonInput = document.getElementById("pitch-block-reason");
@@ -242,7 +243,8 @@ function bindEvents() {
     plannerUiState.friendlyPendingPitchId = friendlyPitchSelect.value || null;
   });
   friendlyDateInput.addEventListener("change", onFriendlyDateChange);
-  pitchBlockDateInput.addEventListener("change", onPitchBlockDateChange);
+  pitchBlockStartDateInput.addEventListener("change", onPitchBlockDateChange);
+  pitchBlockEndDateInput.addEventListener("change", onPitchBlockDateChange);
   friendlyCalendarMonthInput.addEventListener("change", renderFriendlyCalendar);
   winterAssignmentForm.addEventListener("submit", onSaveWinterAssignment);
   summerTrainingForm.addEventListener("submit", onSaveSummerTraining);
@@ -368,15 +370,20 @@ function normalizeState(rawState = {}) {
     : [];
   const pitchBlocks = Array.isArray(rawState.pitchBlocks)
     ? rawState.pitchBlocks
-        .map((block) => ({
-          id: block.id || id("block"),
-          pitchId: String(block.pitchId || ""),
-          date: normalizeDateInput(block.date),
-          startTime: normalizeTimeInput(block.startTime),
-          endTime: normalizeTimeInput(block.endTime),
-          reason: String(block.reason || "").trim(),
-        }))
-        .filter((block) => block.pitchId && block.date && block.startTime && block.endTime)
+        .map((block) => {
+          const startDate = normalizeDateInput(block.startDate || block.date);
+          const endDate = normalizeDateInput(block.endDate || block.date) || startDate;
+          return {
+            id: block.id || id("block"),
+            pitchId: String(block.pitchId || ""),
+            startDate,
+            endDate,
+            startTime: normalizeTimeInput(block.startTime),
+            endTime: normalizeTimeInput(block.endTime),
+            reason: String(block.reason || "").trim(),
+          };
+        })
+        .filter((block) => block.pitchId && block.startDate && block.endDate && block.endDate >= block.startDate && block.startTime && block.endTime)
     : [];
   const lockedAssignments = Array.isArray(rawState.lockedAssignments)
     ? rawState.lockedAssignments
@@ -1614,7 +1621,8 @@ function renderFriendlyBookingPlanner() {
   renderPitchBlockPitchOptions(editState.pitchBlockId ? pitchBlockPitchSelect.value : "");
   if (!friendlyDateInput.value) friendlyDateInput.value = toDateInputValue(new Date());
   if (!friendlyKickoffInput.value) friendlyKickoffInput.value = "10:00";
-  if (!pitchBlockDateInput.value) pitchBlockDateInput.value = friendlyDateInput.value || toDateInputValue(new Date());
+  if (!pitchBlockStartDateInput.value) pitchBlockStartDateInput.value = friendlyDateInput.value || toDateInputValue(new Date());
+  if (!pitchBlockEndDateInput.value) pitchBlockEndDateInput.value = pitchBlockStartDateInput.value;
   if (!pitchBlockStartInput.value) pitchBlockStartInput.value = "10:00";
   if (!pitchBlockEndInput.value) pitchBlockEndInput.value = "11:00";
   if (!friendlyCalendarMonthInput.value) friendlyCalendarMonthInput.value = toMonthInputValue(new Date());
@@ -1631,10 +1639,14 @@ function onFriendlyDateChange() {
 }
 
 function onPitchBlockDateChange() {
-  const date = normalizeDateInput(pitchBlockDateInput.value);
-  if (date) {
-    friendlyDateInput.value = date;
-    friendlyCalendarMonthInput.value = date.slice(0, 7);
+  const startDate = normalizeDateInput(pitchBlockStartDateInput.value);
+  const endDate = normalizeDateInput(pitchBlockEndDateInput.value);
+  if (startDate && (!endDate || endDate < startDate)) {
+    pitchBlockEndDateInput.value = startDate;
+  }
+  if (startDate) {
+    friendlyDateInput.value = startDate;
+    friendlyCalendarMonthInput.value = startDate.slice(0, 7);
   }
   renderFriendlyDayBoard();
   renderFriendlyCalendar();
@@ -1763,7 +1775,8 @@ function onSavePitchBlock(event) {
   const blockId = editState.pitchBlockId || id("block");
   const payload = {
     pitchId: formData.get("pitchId").toString(),
-    date: normalizeDateInput(formData.get("date")),
+    startDate: normalizeDateInput(formData.get("startDate")),
+    endDate: normalizeDateInput(formData.get("endDate")),
     startTime: normalizeTimeInput(formData.get("startTime")),
     endTime: normalizeTimeInput(formData.get("endTime")),
     reason: formData.get("reason").toString().trim(),
@@ -1771,8 +1784,8 @@ function onSavePitchBlock(event) {
   const block = { id: blockId, ...payload };
   const issue = validatePitchBlock(block, editState.pitchBlockId);
   if (issue) return setFriendlyMessage(issue, "error");
-  friendlyDateInput.value = payload.date;
-  friendlyCalendarMonthInput.value = payload.date.slice(0, 7);
+  friendlyDateInput.value = payload.startDate;
+  friendlyCalendarMonthInput.value = payload.startDate.slice(0, 7);
 
   if (editState.pitchBlockId) {
     const existing = state.pitchBlocks.find((item) => item.id === editState.pitchBlockId);
@@ -1842,7 +1855,9 @@ function validateFriendlyBooking(booking, ignoreBookingId = null) {
 function validatePitchBlock(block, ignoreBlockId = null) {
   const pitch = state.pitches.find((item) => item.id === block.pitchId);
   if (!pitch) return "Choose a valid pitch to block.";
-  if (!block.date) return "Choose a valid date for the pitch block.";
+  if (!getPitchBlockStartDate(block)) return "Choose a valid start date for the pitch block.";
+  if (!getPitchBlockEndDate(block)) return "Choose a valid end date for the pitch block.";
+  if (getPitchBlockEndDate(block) < getPitchBlockStartDate(block)) return "Pitch block end date must be on or after the start date.";
   if (!block.startTime || !block.endTime) return "Choose valid start and end times for the pitch block.";
   const range = pitchBlockToRange(block);
   if (!range || range.end <= range.start) return "Pitch block end time must be after the start time.";
@@ -1863,15 +1878,15 @@ function validatePitchBlock(block, ignoreBlockId = null) {
   });
   if (blockConflict) {
     const blockPitch = state.pitches.find((item) => item.id === blockConflict.pitchId);
-    return `${blockPitch?.name || "That pitch"} already has a block from ${blockConflict.startTime} to ${blockConflict.endTime}.`;
+    return `${blockPitch?.name || "That pitch"} already has a block from ${formatPitchBlockDateRange(blockConflict)} ${blockConflict.startTime} to ${blockConflict.endTime}.`;
   }
 
-  const trainingConflict = getSummerTrainingBlocksForDate(block.date).find((existing) =>
-    pitchBlockConflictsWithRange(existing, pitch, range)
-  );
+  const trainingConflict = getDatesInRange(range.startDate, range.endDate)
+    .flatMap((date) => getSummerTrainingBlocksForDate(date))
+    .find((existing) => pitchBlockConflictsWithRange(existing, pitch, range));
   if (trainingConflict) {
     const blockPitch = state.pitches.find((item) => item.id === trainingConflict.pitchId);
-    return `${blockPitch?.name || "That pitch"} is already reserved for summer training from ${trainingConflict.startTime} to ${trainingConflict.endTime}.`;
+    return `${blockPitch?.name || "That pitch"} is already reserved for summer training on ${formatDateLabel(trainingConflict.date)} from ${trainingConflict.startTime} to ${trainingConflict.endTime}.`;
   }
 
   return null;
@@ -1891,29 +1906,64 @@ function friendlyBookingToRange(booking) {
   if (!Number.isFinite(start)) return null;
   return {
     date: booking.date,
+    startDate: booking.date,
+    endDate: booking.date,
     start,
     end: start + booking.durationMinutes,
   };
 }
 
 function pitchBlockToRange(block) {
+  const startDate = getPitchBlockStartDate(block);
+  const endDate = getPitchBlockEndDate(block);
   const start = toClockMinutes(block.startTime);
   const end = toClockMinutes(block.endTime);
-  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  if (!startDate || !endDate || !Number.isFinite(start) || !Number.isFinite(end)) return null;
   return {
-    date: block.date,
+    date: startDate,
+    startDate,
+    endDate,
     start,
     end,
   };
 }
 
 function pitchBlockConflictsWithRange(block, targetPitch, range) {
-  if (!range || block.date !== range.date) return false;
+  if (!range) return false;
   const blockPitch = state.pitches.find((pitch) => pitch.id === block.pitchId);
   if (!blockPitch || !targetPitch || !pitchesSharePhysicalSpace(blockPitch, targetPitch)) return false;
   const blockRange = pitchBlockToRange(block);
   if (!blockRange || blockRange.end <= blockRange.start) return false;
+  const rangeStartDate = range.startDate || range.date;
+  const rangeEndDate = range.endDate || range.date;
+  if (!dateRangesOverlap(blockRange.startDate, blockRange.endDate, rangeStartDate, rangeEndDate)) return false;
   return timesOverlap(blockRange.start, blockRange.end, range.start, range.end);
+}
+
+function getPitchBlockStartDate(block) {
+  return normalizeDateInput(block?.startDate || block?.date);
+}
+
+function getPitchBlockEndDate(block) {
+  return normalizeDateInput(block?.endDate || block?.date) || getPitchBlockStartDate(block);
+}
+
+function pitchBlockCoversDate(block, date) {
+  const startDate = getPitchBlockStartDate(block);
+  const endDate = getPitchBlockEndDate(block);
+  return Boolean(date && startDate && endDate && startDate <= date && date <= endDate);
+}
+
+function dateRangesOverlap(startA, endA, startB, endB) {
+  return Boolean(startA && endA && startB && endB && startA <= endB && startB <= endA);
+}
+
+function formatPitchBlockDateRange(block) {
+  const startDate = getPitchBlockStartDate(block);
+  const endDate = getPitchBlockEndDate(block);
+  if (!startDate) return "";
+  if (!endDate || endDate === startDate) return formatDateLabel(startDate);
+  return `${formatDateLabel(startDate)} to ${formatDateLabel(endDate)}`;
 }
 
 function getSummerTrainingBlocksForDate(dateValue) {
@@ -2016,7 +2066,7 @@ function renderFriendlyDayBoard() {
     .filter((booking) => booking.date === selectedDate)
     .sort((a, b) => a.kickoffTime.localeCompare(b.kickoffTime));
   const dayBlocks = [
-    ...state.pitchBlocks.filter((block) => block.date === selectedDate),
+    ...state.pitchBlocks.filter((block) => pitchBlockCoversDate(block, selectedDate)),
     ...getSummerTrainingBlocksForDate(selectedDate),
   ].sort((a, b) => a.startTime.localeCompare(b.startTime));
 
@@ -2049,7 +2099,7 @@ function renderFriendlyDayBoard() {
               </div>
             `).join("")}
           </div>
-          ${matchPitches.map((pitch) => renderFriendlyPitchDayRow(pitch, slots, dayBookings, dayBlocks, gridTemplate)).join("")}
+          ${matchPitches.map((pitch) => renderFriendlyPitchDayRow(pitch, slots, dayBookings, dayBlocks, gridTemplate, selectedDate)).join("")}
         </div>
       </div>
     </section>
@@ -2069,14 +2119,14 @@ function buildFriendlyDaySlots() {
   return slots;
 }
 
-function renderFriendlyPitchDayRow(pitch, slots, dayBookings, dayBlocks, gridTemplate) {
+function renderFriendlyPitchDayRow(pitch, slots, dayBookings, dayBlocks, gridTemplate, selectedDate) {
   const pitchBookings = dayBookings.filter((booking) => {
     const bookingPitch = state.pitches.find((item) => item.id === booking.pitchId);
     return bookingPitch && pitchesSharePhysicalSpace(pitch, bookingPitch);
   });
   const exactPitchBookings = pitchBookings.filter((booking) => booking.pitchId === pitch.id);
   const pitchBlocks = dayBlocks.filter((block) => pitchBlockConflictsWithRange(block, pitch, {
-    date: block.date,
+    date: selectedDate,
     start: 0,
     end: 24 * 60,
   }));
@@ -2284,17 +2334,16 @@ function groupFriendlyBookingsByDate(monthValue) {
 
 function groupPitchBlocksByDate(monthValue) {
   const byDate = new Map();
-  for (const block of state.pitchBlocks) {
-    if (!block.date.startsWith(monthValue)) continue;
-    if (!byDate.has(block.date)) byDate.set(block.date, []);
-    byDate.get(block.date).push(block);
-  }
   const [year, month] = monthValue.split("-").map(Number);
   const daysInMonth = Number.isFinite(year) && Number.isFinite(month)
     ? new Date(year, month, 0).getDate()
     : 0;
   for (let day = 1; day <= daysInMonth; day += 1) {
     const date = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    const manualBlocks = state.pitchBlocks.filter((block) => pitchBlockCoversDate(block, date));
+    if (manualBlocks.length) {
+      byDate.set(date, manualBlocks);
+    }
     const trainingBlocks = getSummerTrainingBlocksForDate(date);
     if (!trainingBlocks.length) continue;
     if (!byDate.has(date)) byDate.set(date, []);
@@ -2333,10 +2382,12 @@ function renderPitchBlockCalendarCard(block) {
   const canWrite = canCurrentUserWrite() && block.source !== "summer-training";
   const blockClass = block.source === "summer-training" ? "is-training" : "is-maintenance";
   const label = block.reason || (block.source === "summer-training" ? "Summer training" : "Pitch blocked");
+  const dateRange = block.source === "summer-training" ? "" : formatPitchBlockDateRange(block);
   return `
     <article class="friendly-booking-card ${blockClass}">
       <strong>${escapeHtml(block.startTime)}-${escapeHtml(block.endTime)}</strong>
       <span>${escapeHtml(label)}</span>
+      ${dateRange ? `<small>${escapeHtml(dateRange)}</small>` : ""}
       <small>${escapeHtml(pitch ? `${getVenueName(pitch.venueId)} / ${pitch.name}` : "Deleted pitch")}</small>
       ${canWrite ? `
         <div class="friendly-booking-actions">
@@ -4942,12 +4993,13 @@ function startEditPitchBlock(blockId) {
   setActiveTab("friendlies");
   editState.pitchBlockId = blockId;
   renderPitchBlockPitchOptions(block.pitchId);
-  pitchBlockDateInput.value = block.date;
+  pitchBlockStartDateInput.value = getPitchBlockStartDate(block);
+  pitchBlockEndDateInput.value = getPitchBlockEndDate(block);
   pitchBlockStartInput.value = block.startTime;
   pitchBlockEndInput.value = block.endTime;
   pitchBlockReasonInput.value = block.reason || "";
-  friendlyDateInput.value = block.date;
-  friendlyCalendarMonthInput.value = block.date.slice(0, 7);
+  friendlyDateInput.value = getPitchBlockStartDate(block);
+  friendlyCalendarMonthInput.value = getPitchBlockStartDate(block).slice(0, 7);
   renderFriendlyDayBoard();
   renderFriendlyCalendar();
   syncEditorButtons();
@@ -4984,7 +5036,8 @@ function resetFriendlyBookingForm({ keepMessage = false } = {}) {
 function resetPitchBlockForm({ keepMessage = false } = {}) {
   editState.pitchBlockId = null;
   pitchBlockForm.reset();
-  pitchBlockDateInput.value = friendlyDateInput.value || toDateInputValue(new Date());
+  pitchBlockStartDateInput.value = friendlyDateInput.value || toDateInputValue(new Date());
+  pitchBlockEndDateInput.value = pitchBlockStartDateInput.value;
   pitchBlockStartInput.value = "10:00";
   pitchBlockEndInput.value = "11:00";
   renderPitchBlockPitchOptions();
@@ -5231,6 +5284,22 @@ function toDateInputValue(date) {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function getDatesInRange(startDate, endDate) {
+  const start = normalizeDateInput(startDate);
+  const end = normalizeDateInput(endDate);
+  if (!start || !end || end < start) return [];
+  const [startYear, startMonth, startDay] = start.split("-").map(Number);
+  const [endYear, endMonth, endDay] = end.split("-").map(Number);
+  const cursor = new Date(startYear, startMonth - 1, startDay);
+  const last = new Date(endYear, endMonth - 1, endDay);
+  const dates = [];
+  while (cursor <= last) {
+    dates.push(toDateInputValue(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return dates;
 }
 
 function toMonthInputValue(date) {
