@@ -39,6 +39,24 @@ body {
   flex-wrap: wrap;
 }
 
+.hero-brand {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  min-width: min(100%, 420px);
+}
+
+.club-logo {
+  width: 76px;
+  height: 76px;
+  flex: 0 0 auto;
+  object-fit: contain;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.92);
+  border: 2px solid rgba(255, 255, 255, 0.72);
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.22);
+}
+
 .hero h1 {
   margin: 0;
   font-size: 1.6rem;
@@ -754,6 +772,15 @@ td.empty-state {
 @media (max-width: 780px) {
   .hero {
     align-items: flex-start;
+  }
+
+  .hero-brand {
+    align-items: flex-start;
+  }
+
+  .club-logo {
+    width: 58px;
+    height: 58px;
   }
 
   .field-span-2,
