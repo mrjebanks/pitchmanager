@@ -2194,7 +2194,7 @@ function renderTrainingVisualCell(assignments, areasUsed, capacity) {
         ? assignments.map((assignment) => `
           <div class="training-visual-team">
             <strong>${escapeHtml(formatTeamDisplayName(assignment.team))}</strong>
-            <small>${escapeHtml(`${formatTrainingAreaLabel(assignment.team.winterTrainingAreas)} · prefers ${assignment.team.winterTrainingPreference}`)}</small>
+            <small>${escapeHtml(formatTrainingAreaLabel(assignment.team.winterTrainingAreas))}</small>
           </div>`).join("")
         : '<span class="empty-state">No teams allocated.</span>'}
     </div>`;
