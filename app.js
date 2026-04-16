@@ -129,6 +129,7 @@ const winterSubmitBtn = document.getElementById("winter-submit-btn");
 const winterCancelBtn = document.getElementById("winter-cancel-btn");
 const winterAutoBtn = document.getElementById("winter-auto-btn");
 const winterClearBtn = document.getElementById("winter-clear-btn");
+const winterPdfBtn = document.getElementById("winter-pdf-btn");
 const winterTrainingBoard = document.getElementById("winter-training-board");
 const winterTrainingVisual = document.getElementById("winter-training-visual");
 const summerTrainingForm = document.getElementById("summer-training-form");
@@ -140,6 +141,7 @@ const summerSubmitBtn = document.getElementById("summer-submit-btn");
 const summerCancelBtn = document.getElementById("summer-cancel-btn");
 const summerAutoBtn = document.getElementById("summer-auto-btn");
 const summerClearBtn = document.getElementById("summer-clear-btn");
+const summerPdfBtn = document.getElementById("summer-pdf-btn");
 const summerTrainingBoard = document.getElementById("summer-training-board");
 const summerTrainingVisual = document.getElementById("summer-training-visual");
 const exportBtn = document.getElementById("export-btn");
@@ -201,8 +203,10 @@ function bindEvents() {
   winterCancelBtn.addEventListener("click", resetWinterAssignmentForm);
   winterAutoBtn.addEventListener("click", autoFillWinterAssignments);
   winterClearBtn.addEventListener("click", clearWinterAssignments);
+  winterPdfBtn.addEventListener("click", () => openTrainingPlanPdf("winter"));
   summerAutoBtn.addEventListener("click", autoFillSummerAssignments);
   summerClearBtn.addEventListener("click", clearSummerAssignments);
+  summerPdfBtn.addEventListener("click", () => openTrainingPlanPdf("summer"));
   summerCancelBtn.addEventListener("click", resetSummerTrainingForm);
   userForm.addEventListener("submit", onSaveUser);
   userCancelBtn.addEventListener("click", resetUserForm);
@@ -2198,6 +2202,430 @@ function renderTrainingVisualCell(assignments, areasUsed, capacity) {
           </div>`).join("")
         : '<span class="empty-state">No teams allocated.</span>'}
     </div>`;
+}
+
+function openTrainingPlanPdf(planType) {
+  const reportWindow = window.open("", "_blank");
+  if (!reportWindow) {
+    setTrainingMessage("Allow pop-ups for this site to generate the PDF.", "error");
+    return;
+  }
+
+  reportWindow.document.open();
+  reportWindow.document.write(buildTrainingPlanPdfDocument(planType));
+  reportWindow.document.close();
+  reportWindow.focus();
+}
+
+function buildTrainingPlanPdfDocument(planType) {
+  const isWinter = planType === "winter";
+  const title = isWinter ? "Winter Training Plan" : "Summer Training Plan";
+  const assignedCount = isWinter ? state.winterTrainingAssignments.length : state.summerTrainingAssignments.length;
+  const unassignedTeams = getUnassignedTrainingTeams(isWinter ? state.winterTrainingAssignments : state.summerTrainingAssignments);
+  const generatedAt = new Date().toLocaleString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const logoUrl = new URL("assets/club-logo.png", window.location.href).href;
+  const sections = isWinter ? getWinterTrainingPdfSections() : getSummerTrainingPdfSections();
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${escapeHtml(title)}</title>
+  <style>
+    :root {
+      --ink: #17212b;
+      --muted: #54687a;
+      --line: #cfd9d9;
+      --soft: #f3f7f6;
+      --brand: #123249;
+      --accent: #0e7a67;
+      --gold: #f3c13a;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Arial, sans-serif;
+      color: var(--ink);
+      background: #ffffff;
+    }
+
+    .pdf-page {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 28px;
+    }
+
+    .pdf-header {
+      display: grid;
+      grid-template-columns: 88px 1fr;
+      gap: 18px;
+      align-items: center;
+      border-bottom: 5px solid var(--gold);
+      padding-bottom: 18px;
+      margin-bottom: 18px;
+    }
+
+    .pdf-logo {
+      width: 88px;
+      height: 88px;
+      object-fit: contain;
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin: 0;
+    }
+
+    h1 {
+      color: var(--brand);
+      font-size: 30px;
+      line-height: 1.12;
+    }
+
+    .pdf-subtitle {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin: 18px 0;
+    }
+
+    .summary-card {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px 12px;
+      background: var(--soft);
+    }
+
+    .summary-card strong {
+      display: block;
+      color: var(--brand);
+      font-size: 20px;
+      line-height: 1.2;
+    }
+
+    .summary-card span {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .plan-section {
+      break-inside: avoid;
+      margin-top: 20px;
+    }
+
+    .section-title {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: baseline;
+      margin-bottom: 8px;
+      color: var(--brand);
+    }
+
+    .section-title h2 {
+      font-size: 20px;
+    }
+
+    .section-title p {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+      border: 1px solid var(--line);
+    }
+
+    th,
+    td {
+      border: 1px solid var(--line);
+      padding: 8px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    thead th {
+      background: var(--brand);
+      color: #ffffff;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    tbody th {
+      width: 76px;
+      background: #eef4f3;
+      color: var(--brand);
+      font-size: 14px;
+      white-space: nowrap;
+    }
+
+    td {
+      min-height: 96px;
+      background: #ffffff;
+    }
+
+    .slot-meta {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+
+    .slot-meta.is-full {
+      color: #8a5b00;
+    }
+
+    .team-list {
+      display: grid;
+      gap: 5px;
+    }
+
+    .team-card {
+      border-left: 4px solid var(--accent);
+      border-radius: 7px;
+      background: #f7faf9;
+      padding: 6px 7px;
+      break-inside: avoid;
+    }
+
+    .team-card strong,
+    .team-card span {
+      display: block;
+    }
+
+    .team-card strong {
+      font-size: 12px;
+      line-height: 1.25;
+    }
+
+    .team-card span {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .empty-slot {
+      color: #7b8c98;
+      font-size: 11px;
+      font-style: italic;
+    }
+
+    .unassigned {
+      margin-top: 20px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 12px;
+      background: #fffaf0;
+      break-inside: avoid;
+    }
+
+    .unassigned h2 {
+      color: var(--brand);
+      font-size: 18px;
+      margin-bottom: 8px;
+    }
+
+    .unassigned-list {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 6px;
+      color: var(--ink);
+      font-size: 12px;
+    }
+
+    .empty-report {
+      border: 1px dashed var(--line);
+      border-radius: 10px;
+      padding: 18px;
+      color: var(--muted);
+      background: var(--soft);
+    }
+
+    .pdf-footer {
+      margin-top: 22px;
+      padding-top: 10px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    @media print {
+      @page {
+        size: A4 landscape;
+        margin: 10mm;
+      }
+
+      body {
+        print-color-adjust: exact;
+        -webkit-print-color-adjust: exact;
+      }
+
+      .pdf-page {
+        max-width: none;
+        padding: 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="pdf-page">
+    <header class="pdf-header">
+      <img class="pdf-logo" src="${escapeHtml(logoUrl)}" alt="Gregson Lane JFC crest" />
+      <div>
+        <h1>Gregson Lane JFC ${escapeHtml(title)}</h1>
+        <p class="pdf-subtitle">${escapeHtml(state.season.name || "Current season")} · Generated ${escapeHtml(generatedAt)}</p>
+      </div>
+    </header>
+
+    <section class="summary-grid" aria-label="Plan summary">
+      <div class="summary-card"><strong>${escapeHtml(String(assignedCount))}</strong><span>Teams Assigned</span></div>
+      <div class="summary-card"><strong>${escapeHtml(String(state.teams.length))}</strong><span>Total Teams</span></div>
+      <div class="summary-card"><strong>${escapeHtml(String(unassignedTeams.length))}</strong><span>Unassigned</span></div>
+      <div class="summary-card"><strong>${escapeHtml(isWinter ? "Brownedge" : String(getSummerEnabledVenues().length))}</strong><span>${escapeHtml(isWinter ? "Venue" : "Venues")}</span></div>
+    </section>
+
+    ${sections.length ? sections.map(renderTrainingPdfSection).join("") : renderTrainingPdfEmptyState(planType)}
+    ${renderTrainingPdfUnassigned(unassignedTeams)}
+
+    <footer class="pdf-footer">
+      Training slots are one hour long. Area usage reflects each team's training area requirement.
+    </footer>
+  </main>
+  <script>
+    window.addEventListener("load", () => {
+      setTimeout(() => window.print(), 250);
+    });
+  </script>
+</body>
+</html>`;
+}
+
+function getWinterTrainingPdfSections() {
+  return [{
+    title: "Brownedge",
+    subtitle: "3 training areas available each hour",
+    getAssignments: (day, time) => getWinterAssignmentsForSlot(day, time),
+    getAreasUsed: (day, time) => getWinterSlotAreasUsed(day, time),
+    getCapacity: () => 3,
+  }];
+}
+
+function getSummerTrainingPdfSections() {
+  return getSummerEnabledVenues().map((venue) => ({
+    title: venue.name,
+    subtitle: `${formatTrainingAreaLabel(venue.summerTrainingAreas)} available each hour`,
+    getAssignments: (day, time) => getSummerAssignmentsForSlot(venue.id, day, time),
+    getAreasUsed: (day, time) => getSummerSlotAreasUsed(venue.id, day, time),
+    getCapacity: () => venue.summerTrainingAreas,
+  }));
+}
+
+function renderTrainingPdfSection(section) {
+  return `
+    <section class="plan-section">
+      <div class="section-title">
+        <h2>${escapeHtml(section.title)}</h2>
+        <p>${escapeHtml(section.subtitle)}</p>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th>
+            ${WINTER_TRAINING_DAYS.map((day) => `<th>${escapeHtml(day)}</th>`).join("")}
+          </tr>
+        </thead>
+        <tbody>
+          ${WINTER_TRAINING_TIMES.map((time) => `
+            <tr>
+              <th>${escapeHtml(time)}</th>
+              ${WINTER_TRAINING_DAYS.map((day) => renderTrainingPdfCell(
+                section.getAssignments(day, time),
+                section.getAreasUsed(day, time),
+                section.getCapacity(day, time)
+              )).join("")}
+            </tr>`).join("")}
+        </tbody>
+      </table>
+    </section>`;
+}
+
+function renderTrainingPdfCell(assignments, areasUsed, capacity) {
+  const isFull = areasUsed >= capacity && capacity > 0;
+  return `
+    <td>
+      <div class="slot-meta${isFull ? " is-full" : ""}">${escapeHtml(`${areasUsed} of ${capacity} areas used`)}</div>
+      ${assignments.length ? `
+        <div class="team-list">
+          ${assignments.map((assignment) => renderTrainingPdfTeam(assignment.team)).join("")}
+        </div>
+      ` : '<div class="empty-slot">No teams allocated</div>'}
+    </td>`;
+}
+
+function renderTrainingPdfTeam(team) {
+  return `
+    <div class="team-card">
+      <strong>${escapeHtml(formatTeamDisplayName(team))}</strong>
+      <span>${escapeHtml(`${team.format} · ${formatTrainingAreaLabel(team.winterTrainingAreas)}`)}</span>
+    </div>`;
+}
+
+function renderTrainingPdfUnassigned(unassignedTeams) {
+  if (!unassignedTeams.length) {
+    return `
+      <section class="unassigned">
+        <h2>Unassigned Teams</h2>
+        <p class="empty-slot">All teams are assigned.</p>
+      </section>`;
+  }
+
+  return `
+    <section class="unassigned">
+      <h2>Unassigned Teams</h2>
+      <div class="unassigned-list">
+        ${unassignedTeams.map((team) => `
+          <div>${escapeHtml(formatTeamDisplayName(team))} · ${escapeHtml(team.format)} · ${escapeHtml(formatTrainingAreaLabel(team.winterTrainingAreas))}</div>
+        `).join("")}
+      </div>
+    </section>`;
+}
+
+function renderTrainingPdfEmptyState(planType) {
+  const message = planType === "summer"
+    ? "No summer venues are configured yet. Set Summer Areas on at least one venue before generating the summer training plan."
+    : "No winter training data is available yet.";
+  return `<section class="empty-report">${escapeHtml(message)}</section>`;
+}
+
+function getUnassignedTrainingTeams(assignments) {
+  const assignedIds = new Set(assignments.map((assignment) => assignment.teamId));
+  return sortTeams(state.teams).filter((team) => !assignedIds.has(team.id));
 }
 
 function setTrainingMessage(text, type) {
