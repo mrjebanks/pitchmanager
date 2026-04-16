@@ -48,7 +48,7 @@ const defaultSeasonStore = {
 
 const defaultData = {
   season: { name: "2026/27", notes: "" },
-  settings: { warmupMinutes: 30, packAwayMinutes: 15, showVisualPlanner: true },
+  settings: { warmupMinutes: 30, packAwayMinutes: 15, showVisualPlanner: true, summerTrainingStartDate: "" },
   teams: [],
   venues: [],
   pitches: [],
@@ -183,6 +183,7 @@ const summerCancelBtn = document.getElementById("summer-cancel-btn");
 const summerAutoBtn = document.getElementById("summer-auto-btn");
 const summerClearBtn = document.getElementById("summer-clear-btn");
 const summerPdfBtn = document.getElementById("summer-pdf-btn");
+const summerTrainingStartDateInput = document.getElementById("summer-training-start-date");
 const summerTrainingBoard = document.getElementById("summer-training-board");
 const summerTrainingVisual = document.getElementById("summer-training-visual");
 const exportBtn = document.getElementById("export-btn");
@@ -263,6 +264,7 @@ function bindEvents() {
   summerAutoBtn.addEventListener("click", autoFillSummerAssignments);
   summerClearBtn.addEventListener("click", clearSummerAssignments);
   summerPdfBtn.addEventListener("click", () => openTrainingPlanPdf("summer"));
+  summerTrainingStartDateInput.addEventListener("change", onSaveSummerTrainingStartDate);
   summerCancelBtn.addEventListener("click", resetSummerTrainingForm);
   [summerTeamSelect, summerVenueSelect, summerDaySelect, summerTimeSelect].forEach((control) =>
     control.addEventListener("change", () => renderSummerSharedWithOptions())
@@ -284,6 +286,7 @@ function renderAll() {
   warmupMinutesInput.value = state.settings.warmupMinutes;
   packawayMinutesInput.value = state.settings.packAwayMinutes;
   showVisualPlannerInput.checked = state.settings.showVisualPlanner;
+  summerTrainingStartDateInput.value = state.settings.summerTrainingStartDate || "";
   renderTeams();
   renderVenues();
   renderPitchVenueOptions();
@@ -435,6 +438,7 @@ function normalizeState(rawState = {}) {
       warmupMinutes: toPositiveInt(rawState.settings?.warmupMinutes, defaultData.settings.warmupMinutes),
       packAwayMinutes: toPositiveInt(rawState.settings?.packAwayMinutes, defaultData.settings.packAwayMinutes),
       showVisualPlanner: toBoolean(rawState.settings?.showVisualPlanner, defaultData.settings.showVisualPlanner),
+      summerTrainingStartDate: normalizeDateInput(rawState.settings?.summerTrainingStartDate),
     },
     teams,
     venues,
@@ -919,6 +923,7 @@ function syncPermissionUi() {
   editableForms.forEach((form) => toggleFormDisabled(form, !writeAllowed));
   winterPdfBtn.disabled = false;
   summerPdfBtn.disabled = false;
+  summerTrainingStartDateInput.disabled = !writeAllowed;
   seasonSelect.disabled = seasonStore.seasons.length < 2;
   seasonNewBtn.disabled = !writeAllowed;
   seasonDuplicateBtn.disabled = !writeAllowed;
@@ -1215,6 +1220,26 @@ function onSaveSettings(event) {
   syncVisualPlannerTab();
   setMessage("Global match settings saved.", "ok");
 }
+
+function onSaveSummerTrainingStartDate() {
+  if (!requireWriteAccess()) {
+    summerTrainingStartDateInput.value = state.settings.summerTrainingStartDate || "";
+    return;
+  }
+  const date = normalizeDateInput(summerTrainingStartDateInput.value);
+  state.settings.summerTrainingStartDate = date;
+  summerTrainingStartDateInput.value = date;
+  saveState();
+  renderSummerTrainingPlanner();
+  renderFriendlyBookingPlanner();
+  setTrainingMessage(
+    date
+      ? `Summer training will block friendly bookings from ${formatDateLabel(date)}.`
+      : "Summer training calendar blocking is off until a start date is set.",
+    "ok"
+  );
+}
+
 function onSaveTeam(event) {
   event.preventDefault();
   if (!requireWriteAccess()) return;
@@ -1790,10 +1815,14 @@ function validateFriendlyBooking(booking, ignoreBookingId = null) {
     return `${formatTeamDisplayName(team)} already has a friendly booked from ${teamConflict.kickoffTime} to ${conflictDetails.endTime}.`;
   }
 
-  const blockConflict = state.pitchBlocks.find((block) => pitchBlockConflictsWithRange(block, pitch, bookingRange));
+  const blockConflict = [
+    ...state.pitchBlocks,
+    ...getSummerTrainingBlocksForDate(booking.date),
+  ].find((block) => pitchBlockConflictsWithRange(block, pitch, bookingRange));
   if (blockConflict) {
     const blockPitch = state.pitches.find((item) => item.id === blockConflict.pitchId);
-    return `${blockPitch?.name || "This pitch"} is blocked from ${blockConflict.startTime} to ${blockConflict.endTime}${blockConflict.reason ? ` for ${blockConflict.reason}` : ""}.`;
+    const blockType = blockConflict.source === "summer-training" ? "reserved" : "blocked";
+    return `${blockPitch?.name || "This pitch"} is ${blockType} from ${blockConflict.startTime} to ${blockConflict.endTime}${blockConflict.reason ? ` for ${blockConflict.reason}` : ""}.`;
   }
 
   const conflict = state.friendlyBookings.find((existing) => {
@@ -1835,6 +1864,14 @@ function validatePitchBlock(block, ignoreBlockId = null) {
   if (blockConflict) {
     const blockPitch = state.pitches.find((item) => item.id === blockConflict.pitchId);
     return `${blockPitch?.name || "That pitch"} already has a block from ${blockConflict.startTime} to ${blockConflict.endTime}.`;
+  }
+
+  const trainingConflict = getSummerTrainingBlocksForDate(block.date).find((existing) =>
+    pitchBlockConflictsWithRange(existing, pitch, range)
+  );
+  if (trainingConflict) {
+    const blockPitch = state.pitches.find((item) => item.id === trainingConflict.pitchId);
+    return `${blockPitch?.name || "That pitch"} is already reserved for summer training from ${trainingConflict.startTime} to ${trainingConflict.endTime}.`;
   }
 
   return null;
@@ -1879,6 +1916,68 @@ function pitchBlockConflictsWithRange(block, targetPitch, range) {
   return timesOverlap(blockRange.start, blockRange.end, range.start, range.end);
 }
 
+function getSummerTrainingBlocksForDate(dateValue) {
+  const date = normalizeDateInput(dateValue);
+  const startDate = normalizeDateInput(state.settings.summerTrainingStartDate);
+  if (!date || !startDate || date < startDate) return [];
+
+  const day = getDayNameForDate(date);
+  if (!WINTER_TRAINING_DAYS.includes(day)) return [];
+
+  const blocks = [];
+  for (const venue of getSummerEnabledVenues()) {
+    const venuePitches = getSummerTrainingBlockPitches(venue.id);
+    if (!venuePitches.length) continue;
+
+    for (const time of WINTER_TRAINING_TIMES) {
+      const groups = groupTrainingAssignments(getSummerAssignmentsForSlot(venue.id, day, time));
+      const areasUsed = getTrainingGroupsAreaUsage(groups);
+      if (areasUsed < 1) continue;
+
+      const pitchCount = Math.min(Math.ceil(areasUsed / 2), venuePitches.length);
+      const startMinutes = toClockMinutes(time);
+      const endTime = Number.isFinite(startMinutes) ? toTimeString(startMinutes + 60) : "";
+      const reason = `Summer training (${areasUsed} area${areasUsed === 1 ? "" : "s"})`;
+
+      for (const pitch of venuePitches.slice(0, pitchCount)) {
+        blocks.push({
+          id: `summer-training|${date}|${venue.id}|${time}|${pitch.id}`,
+          pitchId: pitch.id,
+          date,
+          startTime: time,
+          endTime,
+          reason,
+          source: "summer-training",
+        });
+      }
+    }
+  }
+
+  return blocks.sort((a, b) => a.startTime.localeCompare(b.startTime) || getPitchLabel(a.pitchId).localeCompare(getPitchLabel(b.pitchId)));
+}
+
+function getSummerTrainingBlockPitches(venueId) {
+  const physicalSpaces = new Set();
+  return sortPitches(state.pitches.filter((pitch) => pitch.venueId === venueId && isMatchCapablePitch(pitch)))
+    .filter((pitch) => {
+      const physicalKey = pitch.overlayGroup ? `overlay:${pitch.overlayGroup}` : `pitch:${pitch.id}`;
+      if (physicalSpaces.has(physicalKey)) return false;
+      physicalSpaces.add(physicalKey);
+      return true;
+    });
+}
+
+function getDayNameForDate(dateValue) {
+  const [year, month, day] = dateValue.split("-").map(Number);
+  const date = new Date(year, month - 1, day);
+  return DAYS[(date.getDay() + 6) % 7] || "";
+}
+
+function getPitchLabel(pitchId) {
+  const pitch = state.pitches.find((item) => item.id === pitchId);
+  return pitch ? `${getVenueName(pitch.venueId)} ${pitch.name}` : "";
+}
+
 function friendlyBookingTimesOverlap(bookingA, bookingB) {
   if (bookingA.date !== bookingB.date) return false;
   const startA = toClockMinutes(bookingA.kickoffTime);
@@ -1916,9 +2015,10 @@ function renderFriendlyDayBoard() {
   const dayBookings = state.friendlyBookings
     .filter((booking) => booking.date === selectedDate)
     .sort((a, b) => a.kickoffTime.localeCompare(b.kickoffTime));
-  const dayBlocks = state.pitchBlocks
-    .filter((block) => block.date === selectedDate)
-    .sort((a, b) => a.startTime.localeCompare(b.startTime));
+  const dayBlocks = [
+    ...state.pitchBlocks.filter((block) => block.date === selectedDate),
+    ...getSummerTrainingBlocksForDate(selectedDate),
+  ].sort((a, b) => a.startTime.localeCompare(b.startTime));
 
   if (!matchPitches.length) {
     friendlyDayBoard.innerHTML = `<p class="empty-state">Add match-capable pitches in Venue Pitches to build the daily availability board.</p>`;
@@ -1935,6 +2035,7 @@ function renderFriendlyDayBoard() {
           <span><i class="is-available"></i> Available</span>
           <span><i class="is-booked"></i> Booked</span>
           <span><i class="is-maintenance"></i> Blocked</span>
+          <span><i class="is-training"></i> Summer training</span>
           <span><i class="is-blocked"></i> Overlay blocked</span>
         </div>
       </div>
@@ -2019,12 +2120,14 @@ function getFriendlyPitchSlotMarker(pitch, slotStart, pitchBookings, pitchBlocks
     return range && timesOverlap(slotStart, slotEnd, range.start, range.end);
   });
   if (!block) return "is-available";
-  return block.pitchId === pitch.id ? "is-maintenance" : "is-blocked";
+  if (block.pitchId !== pitch.id) return "is-blocked";
+  return block.source === "summer-training" ? "is-training" : "is-maintenance";
 }
 
 function describeFriendlyPitchSlotMarker(marker) {
   if (marker === "is-booked") return "Booked";
   if (marker === "is-maintenance") return "Pitch blocked";
+  if (marker === "is-training") return "Reserved for summer training";
   if (marker === "is-blocked") return "Unavailable because an overlayed pitch is booked";
   return "Available";
 }
@@ -2067,11 +2170,13 @@ function renderPitchBlockDayBlock(block) {
 
   const startIndex = Math.floor((clampedStart - FRIENDLY_DAY_START_MINUTES) / FRIENDLY_DAY_SLOT_MINUTES);
   const endIndex = Math.ceil((clampedEnd - FRIENDLY_DAY_START_MINUTES) / FRIENDLY_DAY_SLOT_MINUTES);
-  const canWrite = canCurrentUserWrite();
+  const canWrite = canCurrentUserWrite() && block.source !== "summer-training";
+  const blockClass = block.source === "summer-training" ? "is-training" : "is-maintenance";
+  const label = block.reason || (block.source === "summer-training" ? "Summer training" : "Pitch blocked");
   return `
-    <article class="friendly-day-board__booking is-maintenance" style="grid-column: ${startIndex + 2} / ${endIndex + 2};">
+    <article class="friendly-day-board__booking ${blockClass}" style="grid-column: ${startIndex + 2} / ${endIndex + 2};">
       <strong>${escapeHtml(block.startTime)}-${escapeHtml(block.endTime)}</strong>
-      <span>${escapeHtml(block.reason || "Pitch blocked")}</span>
+      <span>${escapeHtml(label)}</span>
       ${canWrite ? `
         <div class="friendly-day-board__actions">
           <button class="secondary-btn" type="button" data-edit-pitch-block="${block.id}">Edit</button>
@@ -2184,6 +2289,17 @@ function groupPitchBlocksByDate(monthValue) {
     if (!byDate.has(block.date)) byDate.set(block.date, []);
     byDate.get(block.date).push(block);
   }
+  const [year, month] = monthValue.split("-").map(Number);
+  const daysInMonth = Number.isFinite(year) && Number.isFinite(month)
+    ? new Date(year, month, 0).getDate()
+    : 0;
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    const date = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    const trainingBlocks = getSummerTrainingBlocksForDate(date);
+    if (!trainingBlocks.length) continue;
+    if (!byDate.has(date)) byDate.set(date, []);
+    byDate.get(date).push(...trainingBlocks);
+  }
   for (const blocks of byDate.values()) {
     blocks.sort((a, b) => a.startTime.localeCompare(b.startTime));
   }
@@ -2214,11 +2330,13 @@ function renderFriendlyBookingCard(booking) {
 
 function renderPitchBlockCalendarCard(block) {
   const pitch = state.pitches.find((item) => item.id === block.pitchId);
-  const canWrite = canCurrentUserWrite();
+  const canWrite = canCurrentUserWrite() && block.source !== "summer-training";
+  const blockClass = block.source === "summer-training" ? "is-training" : "is-maintenance";
+  const label = block.reason || (block.source === "summer-training" ? "Summer training" : "Pitch blocked");
   return `
-    <article class="friendly-booking-card is-maintenance">
+    <article class="friendly-booking-card ${blockClass}">
       <strong>${escapeHtml(block.startTime)}-${escapeHtml(block.endTime)}</strong>
-      <span>${escapeHtml(block.reason || "Pitch blocked")}</span>
+      <span>${escapeHtml(label)}</span>
       <small>${escapeHtml(pitch ? `${getVenueName(pitch.venueId)} / ${pitch.name}` : "Deleted pitch")}</small>
       ${canWrite ? `
         <div class="friendly-booking-actions">
@@ -2661,6 +2779,7 @@ function appendSummerTrainingSummary() {
   const enabledVenues = getSummerEnabledVenues();
   const assignedIds = new Set(state.summerTrainingAssignments.map((assignment) => assignment.teamId));
   const unassignedTeams = sortTeams(state.teams).filter((team) => !assignedIds.has(team.id));
+  const calendarStartDate = state.settings.summerTrainingStartDate;
   const board = document.createElement("section");
   board.className = "schedule-board";
   board.innerHTML = `
@@ -2671,7 +2790,9 @@ function appendSummerTrainingSummary() {
     <div class="schedule-board__body">
       <section class="venue-panel">
         <h4>Summer Venues</h4>
-        <p class="venue-panel__meta">Summer training uses whichever venues have summer areas configured in the Venues tab.</p>
+        <p class="venue-panel__meta">${escapeHtml(calendarStartDate
+          ? `Friendly calendar blocks start from ${formatDateLabel(calendarStartDate)}. Two training areas reserve one physical pitch.`
+          : "Set a summer training start date above to block these sessions on the friendly calendar.")}</p>
         <div class="schedule-list">
           ${enabledVenues.length
             ? enabledVenues.map((venue) => `
@@ -2803,6 +2924,7 @@ function onSaveSummerTraining(event) {
 
   saveState();
   renderSummerTrainingPlanner();
+  renderFriendlyBookingPlanner();
   resetSummerTrainingForm();
   setTrainingMessage("Summer training assignment saved.", "ok");
 }
@@ -2923,6 +3045,7 @@ function deleteSummerTraining(teamId) {
   if (editState.summerTeamId === teamId) resetSummerTrainingForm();
   saveState();
   renderSummerTrainingPlanner();
+  renderFriendlyBookingPlanner();
   setTrainingMessage("Summer training assignment removed.", "ok");
 }
 
@@ -2967,6 +3090,7 @@ function autoFillSummerAssignments() {
 
   saveState();
   renderSummerTrainingPlanner();
+  renderFriendlyBookingPlanner();
   setTrainingMessage(
     assignedCount
       ? `Auto-filled ${assignedCount} summer training assignment${assignedCount === 1 ? "" : "s"}.`
@@ -2997,6 +3121,7 @@ function clearSummerAssignments() {
   resetSummerTrainingForm();
   saveState();
   renderSummerTrainingPlanner();
+  renderFriendlyBookingPlanner();
   setTrainingMessage("Summer training plan cleared.", "ok");
 }
 
