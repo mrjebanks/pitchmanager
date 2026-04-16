@@ -125,6 +125,7 @@ const winterAssignmentForm = document.getElementById("winter-assignment-form");
 const winterTeamSelect = document.getElementById("winter-team");
 const winterDaySelect = document.getElementById("winter-day");
 const winterTimeSelect = document.getElementById("winter-time");
+const winterSharedWithSelect = document.getElementById("winter-shared-with");
 const winterSubmitBtn = document.getElementById("winter-submit-btn");
 const winterCancelBtn = document.getElementById("winter-cancel-btn");
 const winterAutoBtn = document.getElementById("winter-auto-btn");
@@ -137,6 +138,7 @@ const summerTeamSelect = document.getElementById("summer-team");
 const summerVenueSelect = document.getElementById("summer-venue");
 const summerDaySelect = summerTrainingForm.elements.day;
 const summerTimeSelect = summerTrainingForm.elements.time;
+const summerSharedWithSelect = document.getElementById("summer-shared-with");
 const summerSubmitBtn = document.getElementById("summer-submit-btn");
 const summerCancelBtn = document.getElementById("summer-cancel-btn");
 const summerAutoBtn = document.getElementById("summer-auto-btn");
@@ -204,10 +206,16 @@ function bindEvents() {
   winterAutoBtn.addEventListener("click", autoFillWinterAssignments);
   winterClearBtn.addEventListener("click", clearWinterAssignments);
   winterPdfBtn.addEventListener("click", () => openTrainingPlanPdf("winter"));
+  [winterTeamSelect, winterDaySelect, winterTimeSelect].forEach((control) =>
+    control.addEventListener("change", () => renderWinterSharedWithOptions())
+  );
   summerAutoBtn.addEventListener("click", autoFillSummerAssignments);
   summerClearBtn.addEventListener("click", clearSummerAssignments);
   summerPdfBtn.addEventListener("click", () => openTrainingPlanPdf("summer"));
   summerCancelBtn.addEventListener("click", resetSummerTrainingForm);
+  [summerTeamSelect, summerVenueSelect, summerDaySelect, summerTimeSelect].forEach((control) =>
+    control.addEventListener("change", () => renderSummerSharedWithOptions())
+  );
   userForm.addEventListener("submit", onSaveUser);
   userCancelBtn.addEventListener("click", resetUserForm);
   refreshUsersBtn.addEventListener("click", refreshUserDirectory);
@@ -306,6 +314,7 @@ function normalizeState(rawState = {}) {
           teamId: String(assignment.teamId || ""),
           day: WINTER_TRAINING_DAYS.includes(assignment.day) ? assignment.day : "Monday",
           time: normalizeWinterTrainingPreference(assignment.time),
+          sharedWithTeamId: String(assignment.sharedWithTeamId || ""),
         }))
         .filter((assignment) => assignment.teamId)
         .filter(
@@ -320,6 +329,7 @@ function normalizeState(rawState = {}) {
           venueId: String(session.venueId || ""),
           day: WINTER_TRAINING_DAYS.includes(session.day) ? session.day : "Monday",
           time: normalizeWinterTrainingPreference(session.time || session.startTime),
+          sharedWithTeamId: String(session.sharedWithTeamId || ""),
         }))
         .filter((assignment) => assignment.teamId && assignment.venueId)
     : [];
@@ -333,6 +343,7 @@ function normalizeState(rawState = {}) {
       venueId: String(assignment.venueId || ""),
       day: WINTER_TRAINING_DAYS.includes(assignment.day) ? assignment.day : "Monday",
       time: normalizeWinterTrainingPreference(assignment.time),
+      sharedWithTeamId: String(assignment.sharedWithTeamId || ""),
     }))
     .filter((assignment) => assignment.teamId && assignment.venueId)
     .filter(
@@ -808,6 +819,8 @@ function syncPermissionUi() {
   ];
 
   editableForms.forEach((form) => toggleFormDisabled(form, !writeAllowed));
+  winterPdfBtn.disabled = false;
+  summerPdfBtn.disabled = false;
   seasonSelect.disabled = seasonStore.seasons.length < 2;
   seasonNewBtn.disabled = !writeAllowed;
   seasonDuplicateBtn.disabled = !writeAllowed;
@@ -1558,25 +1571,16 @@ function appendWinterTrainingBoard(time) {
 
 function renderWinterTrainingCell(day, time) {
   const assignments = getWinterAssignmentsForSlot(day, time);
-  const areasUsed = assignments.reduce((total, assignment) => total + assignment.team.winterTrainingAreas, 0);
+  const assignmentGroups = groupTrainingAssignments(assignments);
+  const areasUsed = getTrainingGroupsAreaUsage(assignmentGroups);
   const canWrite = canCurrentUserWrite();
   return `
     <section class="venue-panel training-slot-panel">
       <h4>${escapeHtml(day)}</h4>
       <p class="venue-panel__meta">${escapeHtml(`${areasUsed} of 3 areas used at ${time}`)}</p>
       <div class="schedule-list">
-        ${assignments.length
-          ? assignments.map((assignment) => `
-            <article class="schedule-item">
-              <div class="schedule-item__time">${escapeHtml(formatTeamDisplayName(assignment.team))}</div>
-              <div class="schedule-item__meta">${escapeHtml(`${formatTrainingAreaLabel(assignment.team.winterTrainingAreas)} · prefers ${assignment.team.winterTrainingPreference}`)}</div>
-              ${canWrite ? `
-                <div class="schedule-item__actions">
-                  <button class="secondary-btn" type="button" data-edit-winter="${assignment.team.id}">Edit</button>
-                  <button class="delete-btn" type="button" data-delete-winter="${assignment.team.id}">Remove</button>
-                </div>
-              ` : ""}
-            </article>`).join("")
+        ${assignmentGroups.length
+          ? assignmentGroups.map((group) => renderTrainingGroupScheduleItem(group, "winter", canWrite)).join("")
           : '<p class="empty-state">No teams allocated.</p>'}
       </div>
     </section>`;
@@ -1605,6 +1609,7 @@ function renderWinterTeamOptions(selectedTeamId = winterTeamSelect.value) {
   if (state.teams.some((team) => team.id === selectedTeamId)) {
     winterTeamSelect.value = selectedTeamId;
   }
+  renderWinterSharedWithOptions();
 }
 
 function getWinterAssignmentsForSlot(day, time) {
@@ -1622,12 +1627,34 @@ function getWinterAssignmentsForSlot(day, time) {
 }
 
 function getWinterSlotAreasUsed(day, time, ignoreTeamId = null) {
-  return state.winterTrainingAssignments
+  const assignments = state.winterTrainingAssignments
     .filter((assignment) => assignment.day === day && assignment.time === time && assignment.teamId !== ignoreTeamId)
-    .reduce((total, assignment) => {
-      const team = state.teams.find((item) => item.id === assignment.teamId);
-      return total + (team?.winterTrainingAreas || 0);
-    }, 0);
+    .map((assignment) => ({
+      ...assignment,
+      team: state.teams.find((team) => team.id === assignment.teamId),
+    }))
+    .filter((assignment) => assignment.team);
+  return getTrainingGroupsAreaUsage(groupTrainingAssignments(assignments));
+}
+
+function getWinterAssignmentPreview(day, time, ignoreTeamId = null, previewAssignment = null) {
+  const assignments = state.winterTrainingAssignments
+    .filter((assignment) => assignment.day === day && assignment.time === time && assignment.teamId !== ignoreTeamId)
+    .concat(previewAssignment ? [previewAssignment] : [])
+    .map((assignment) => ({
+      ...assignment,
+      team: state.teams.find((team) => team.id === assignment.teamId),
+    }))
+    .filter((assignment) => assignment.team);
+  return assignments;
+}
+
+function renderWinterSharedWithOptions(selectedTeamId = winterSharedWithSelect.value) {
+  const teamId = winterTeamSelect.value;
+  const day = winterDaySelect.value;
+  const time = winterTimeSelect.value;
+  const shareOptions = getWinterAssignmentsForSlot(day, time).filter((assignment) => assignment.teamId !== teamId);
+  renderSharedWithOptions(winterSharedWithSelect, shareOptions, selectedTeamId);
 }
 
 function onSaveWinterAssignment(event) {
@@ -1637,11 +1664,12 @@ function onSaveWinterAssignment(event) {
   const teamId = String(formData.get("teamId") || "");
   const day = String(formData.get("day") || "");
   const time = String(formData.get("time") || "");
-  const issue = validateWinterAssignment(teamId, day, time, editState.winterTeamId || null);
+  const sharedWithTeamId = String(formData.get("sharedWithTeamId") || "");
+  const issue = validateWinterAssignment(teamId, day, time, editState.winterTeamId || null, sharedWithTeamId);
   if (issue) return setTrainingMessage(issue, "error");
 
   const existingIndex = state.winterTrainingAssignments.findIndex((assignment) => assignment.teamId === teamId);
-  const assignment = { teamId, day, time };
+  const assignment = { teamId, day, time, sharedWithTeamId };
   if (existingIndex !== -1) {
     state.winterTrainingAssignments[existingIndex] = assignment;
   } else {
@@ -1654,14 +1682,20 @@ function onSaveWinterAssignment(event) {
   setTrainingMessage("Winter training assignment saved.", "ok");
 }
 
-function validateWinterAssignment(teamId, day, time, ignoreTeamId = null) {
+function validateWinterAssignment(teamId, day, time, ignoreTeamId = null, sharedWithTeamId = "") {
   const team = state.teams.find((item) => item.id === teamId);
   if (!team) return "Choose a valid team for winter training.";
   if (!WINTER_TRAINING_DAYS.includes(day)) return "Choose a valid weekday for winter training.";
   if (!WINTER_TRAINING_TIMES.includes(time)) return "Choose a valid winter training time.";
-  const usedAreas = getWinterSlotAreasUsed(day, time, ignoreTeamId || teamId);
-  if (usedAreas + team.winterTrainingAreas > 3) {
-    return `That winter slot only has ${Math.max(0, 3 - usedAreas)} area${3 - usedAreas === 1 ? "" : "s"} left.`;
+  if (sharedWithTeamId && sharedWithTeamId === teamId) return "A team cannot share a training area with itself.";
+  const slotAssignments = getWinterAssignmentPreview(day, time, ignoreTeamId || teamId, { teamId, day, time, sharedWithTeamId });
+  if (sharedWithTeamId && !slotAssignments.some((assignment) => assignment.teamId === sharedWithTeamId)) {
+    return "Choose a team already in that winter slot to share an area with.";
+  }
+  const usedAreas = getTrainingGroupsAreaUsage(groupTrainingAssignments(slotAssignments));
+  if (usedAreas > 3) {
+    const currentAreas = getWinterSlotAreasUsed(day, time, ignoreTeamId || teamId);
+    return `That winter slot only has ${Math.max(0, 3 - currentAreas)} area${3 - currentAreas === 1 ? "" : "s"} left.`;
   }
   return null;
 }
@@ -1671,9 +1705,11 @@ function startEditWinterAssignment(teamId) {
   if (!assignment) return setTrainingMessage("That winter assignment could not be found.", "error");
   setActiveTab("training");
   editState.winterTeamId = teamId;
+  renderWinterTeamOptions(assignment.teamId);
   winterTeamSelect.value = assignment.teamId;
   winterDaySelect.value = assignment.day;
   winterTimeSelect.value = assignment.time;
+  renderWinterSharedWithOptions(assignment.sharedWithTeamId);
   syncEditorButtons();
 }
 
@@ -1690,8 +1726,10 @@ function resetWinterAssignmentForm() {
   editState.winterTeamId = null;
   winterAssignmentForm.reset();
   renderWinterTeamOptions();
+  renderWinterSharedWithOptions();
   if (WINTER_TRAINING_DAYS.includes("Monday")) winterDaySelect.value = "Monday";
   if (WINTER_TRAINING_TIMES.includes("18:00")) winterTimeSelect.value = "18:00";
+  renderWinterSharedWithOptions();
   syncEditorButtons();
 }
 
@@ -1767,6 +1805,7 @@ function renderSummerTeamOptions(selectedTeamId = summerTeamSelect.value) {
     summerTeamSelect.appendChild(option);
   }
   if (state.teams.some((team) => team.id === selectedTeamId)) summerTeamSelect.value = selectedTeamId;
+  renderSummerSharedWithOptions();
 }
 
 function renderSummerVenueOptions(selectedVenueId = summerVenueSelect.value) {
@@ -1785,6 +1824,7 @@ function renderSummerVenueOptions(selectedVenueId = summerVenueSelect.value) {
     summerVenueSelect.appendChild(option);
   }
   if (enabledVenues.some((venue) => venue.id === selectedVenueId)) summerVenueSelect.value = selectedVenueId;
+  renderSummerSharedWithOptions();
 }
 
 function renderSummerTrainingPlanner() {
@@ -1920,25 +1960,16 @@ function appendSummerTrainingBoard(venue) {
 
 function renderSummerTrainingCell(venue, day, time) {
   const assignments = getSummerAssignmentsForSlot(venue.id, day, time);
-  const areasUsed = assignments.reduce((total, assignment) => total + assignment.team.winterTrainingAreas, 0);
+  const assignmentGroups = groupTrainingAssignments(assignments);
+  const areasUsed = getTrainingGroupsAreaUsage(assignmentGroups);
   const canWrite = canCurrentUserWrite();
   return `
     <section class="venue-panel training-slot-panel">
       <h4>${escapeHtml(day)}</h4>
       <p class="venue-panel__meta">${escapeHtml(`${time} · ${areasUsed} of ${venue.summerTrainingAreas} areas used`)}</p>
       <div class="schedule-list">
-        ${assignments.length
-          ? assignments.map((assignment) => `
-            <article class="schedule-item">
-              <div class="schedule-item__time">${escapeHtml(formatTeamDisplayName(assignment.team))}</div>
-              <div class="schedule-item__meta">${escapeHtml(`${formatTrainingAreaLabel(assignment.team.winterTrainingAreas)} · prefers ${assignment.team.winterTrainingPreference}`)}</div>
-              ${canWrite ? `
-                <div class="schedule-item__actions">
-                  <button class="secondary-btn" type="button" data-edit-summer="${assignment.team.id}">Edit</button>
-                  <button class="delete-btn" type="button" data-delete-summer="${assignment.team.id}">Remove</button>
-                </div>
-              ` : ""}
-            </article>`).join("")
+        ${assignmentGroups.length
+          ? assignmentGroups.map((group) => renderTrainingGroupScheduleItem(group, "summer", canWrite)).join("")
           : '<p class="empty-state">No teams allocated.</p>'}
       </div>
     </section>`;
@@ -1991,10 +2022,11 @@ function onSaveSummerTraining(event) {
   const venueId = String(formData.get("venueId") || "");
   const day = String(formData.get("day") || "");
   const time = String(formData.get("time") || "");
-  const issue = validateSummerTrainingAssignment(teamId, venueId, day, time, editState.summerTeamId || null);
+  const sharedWithTeamId = String(formData.get("sharedWithTeamId") || "");
+  const issue = validateSummerTrainingAssignment(teamId, venueId, day, time, editState.summerTeamId || null, sharedWithTeamId);
   if (issue) return setTrainingMessage(issue, "error");
 
-  const assignment = { teamId, venueId, day, time };
+  const assignment = { teamId, venueId, day, time, sharedWithTeamId };
   const existingIndex = state.summerTrainingAssignments.findIndex((item) => item.teamId === teamId);
   if (existingIndex !== -1) {
     state.summerTrainingAssignments[existingIndex] = assignment;
@@ -2008,16 +2040,22 @@ function onSaveSummerTraining(event) {
   setTrainingMessage("Summer training assignment saved.", "ok");
 }
 
-function validateSummerTrainingAssignment(teamId, venueId, day, time, ignoreTeamId = null) {
+function validateSummerTrainingAssignment(teamId, venueId, day, time, ignoreTeamId = null, sharedWithTeamId = "") {
   const team = state.teams.find((item) => item.id === teamId);
   if (!team) return "Choose a valid team for summer training.";
   const venue = state.venues.find((item) => item.id === venueId);
   if (!venue || venue.summerTrainingAreas < 1) return "Choose a summer-enabled venue.";
   if (!WINTER_TRAINING_DAYS.includes(day)) return "Choose a valid weekday for summer training.";
   if (!WINTER_TRAINING_TIMES.includes(time)) return "Choose a valid summer training time.";
-  const usedAreas = getSummerSlotAreasUsed(venueId, day, time, ignoreTeamId || teamId);
-  if (usedAreas + team.winterTrainingAreas > venue.summerTrainingAreas) {
-    return `That summer slot only has ${Math.max(0, venue.summerTrainingAreas - usedAreas)} area${venue.summerTrainingAreas - usedAreas === 1 ? "" : "s"} left.`;
+  if (sharedWithTeamId && sharedWithTeamId === teamId) return "A team cannot share a training area with itself.";
+  const slotAssignments = getSummerAssignmentPreview(venueId, day, time, ignoreTeamId || teamId, { teamId, venueId, day, time, sharedWithTeamId });
+  if (sharedWithTeamId && !slotAssignments.some((assignment) => assignment.teamId === sharedWithTeamId)) {
+    return "Choose a team already in that summer slot to share an area with.";
+  }
+  const usedAreas = getTrainingGroupsAreaUsage(groupTrainingAssignments(slotAssignments));
+  if (usedAreas > venue.summerTrainingAreas) {
+    const currentAreas = getSummerSlotAreasUsed(venueId, day, time, ignoreTeamId || teamId);
+    return `That summer slot only has ${Math.max(0, venue.summerTrainingAreas - currentAreas)} area${venue.summerTrainingAreas - currentAreas === 1 ? "" : "s"} left.`;
   }
   return null;
 }
@@ -2026,12 +2064,7 @@ function validateSummerVenueCapacity(venueId, areaCapacity) {
   if (areaCapacity < 0) return "Summer areas cannot be negative.";
   for (const day of WINTER_TRAINING_DAYS) {
     for (const time of WINTER_TRAINING_TIMES) {
-      const usedAreas = state.summerTrainingAssignments
-        .filter((assignment) => assignment.venueId === venueId && assignment.day === day && assignment.time === time)
-        .reduce((total, assignment) => {
-          const team = state.teams.find((item) => item.id === assignment.teamId);
-          return total + (team?.winterTrainingAreas || 0);
-        }, 0);
+      const usedAreas = getSummerSlotAreasUsed(venueId, day, time);
       if (usedAreas > areaCapacity) {
         const venueName = state.venues.find((item) => item.id === venueId)?.name || "This venue";
         return `${venueName} already uses ${usedAreas} area${usedAreas === 1 ? "" : "s"} on ${day} at ${time}. Increase Summer Areas or move teams first.`;
@@ -2062,6 +2095,23 @@ function getSummerAssignmentsForSlot(venueId, day, time) {
 }
 
 function getSummerSlotAreasUsed(venueId, day, time, ignoreTeamId = null) {
+  const assignments = state.summerTrainingAssignments
+    .filter(
+      (assignment) =>
+        assignment.venueId === venueId &&
+        assignment.day === day &&
+        assignment.time === time &&
+        assignment.teamId !== ignoreTeamId
+    )
+    .map((assignment) => ({
+      ...assignment,
+      team: state.teams.find((team) => team.id === assignment.teamId),
+    }))
+    .filter((assignment) => assignment.team);
+  return getTrainingGroupsAreaUsage(groupTrainingAssignments(assignments));
+}
+
+function getSummerAssignmentPreview(venueId, day, time, ignoreTeamId = null, previewAssignment = null) {
   return state.summerTrainingAssignments
     .filter(
       (assignment) =>
@@ -2070,10 +2120,21 @@ function getSummerSlotAreasUsed(venueId, day, time, ignoreTeamId = null) {
         assignment.time === time &&
         assignment.teamId !== ignoreTeamId
     )
-    .reduce((total, assignment) => {
-      const team = state.teams.find((item) => item.id === assignment.teamId);
-      return total + (team?.winterTrainingAreas || 0);
-    }, 0);
+    .concat(previewAssignment ? [previewAssignment] : [])
+    .map((assignment) => ({
+      ...assignment,
+      team: state.teams.find((team) => team.id === assignment.teamId),
+    }))
+    .filter((assignment) => assignment.team);
+}
+
+function renderSummerSharedWithOptions(selectedTeamId = summerSharedWithSelect.value) {
+  const teamId = summerTeamSelect.value;
+  const venueId = summerVenueSelect.value;
+  const day = summerDaySelect.value;
+  const time = summerTimeSelect.value;
+  const shareOptions = getSummerAssignmentsForSlot(venueId, day, time).filter((assignment) => assignment.teamId !== teamId);
+  renderSharedWithOptions(summerSharedWithSelect, shareOptions, selectedTeamId);
 }
 
 function startEditSummerTraining(teamId) {
@@ -2085,6 +2146,7 @@ function startEditSummerTraining(teamId) {
   renderSummerVenueOptions(assignment.venueId);
   summerDaySelect.value = assignment.day;
   summerTimeSelect.value = assignment.time;
+  renderSummerSharedWithOptions(assignment.sharedWithTeamId);
   syncEditorButtons();
 }
 
@@ -2104,6 +2166,7 @@ function resetSummerTrainingForm() {
   renderSummerVenueOptions();
   if (WINTER_TRAINING_DAYS.includes("Monday")) summerDaySelect.value = "Monday";
   if (WINTER_TRAINING_TIMES.includes("18:00")) summerTimeSelect.value = "18:00";
+  renderSummerSharedWithOptions();
   syncEditorButtons();
 }
 
@@ -2191,17 +2254,118 @@ function renderTrainingVisualTable(cellRenderer) {
 }
 
 function renderTrainingVisualCell(assignments, areasUsed, capacity) {
+  const assignmentGroups = groupTrainingAssignments(assignments);
   return `
     <div class="training-visual-cell">
       <div class="training-visual-capacity">${escapeHtml(`${areasUsed} of ${capacity} areas used`)}</div>
-      ${assignments.length
-        ? assignments.map((assignment) => `
-          <div class="training-visual-team">
-            <strong>${escapeHtml(formatTeamDisplayName(assignment.team))}</strong>
-            <small>${escapeHtml(formatTrainingAreaLabel(assignment.team.winterTrainingAreas))}</small>
+      ${assignmentGroups.length
+        ? assignmentGroups.map((group) => `
+          <div class="training-visual-team${group.isShared ? " is-shared" : ""}">
+            <strong>${escapeHtml(formatTrainingGroupTitle(group))}</strong>
+            <small>${escapeHtml(formatTrainingGroupAreaLabel(group))}</small>
           </div>`).join("")
         : '<span class="empty-state">No teams allocated.</span>'}
     </div>`;
+}
+
+function groupTrainingAssignments(assignments) {
+  const validAssignments = assignments.filter((assignment) => assignment?.team);
+  const assignmentByTeamId = new Map(validAssignments.map((assignment) => [assignment.teamId, assignment]));
+  const links = new Map(validAssignments.map((assignment) => [assignment.teamId, new Set()]));
+
+  for (const assignment of validAssignments) {
+    const sharedWithTeamId = String(assignment.sharedWithTeamId || "");
+    if (!sharedWithTeamId || sharedWithTeamId === assignment.teamId || !assignmentByTeamId.has(sharedWithTeamId)) continue;
+    links.get(assignment.teamId).add(sharedWithTeamId);
+    links.get(sharedWithTeamId).add(assignment.teamId);
+  }
+
+  const visited = new Set();
+  const groups = [];
+  for (const assignment of validAssignments) {
+    if (visited.has(assignment.teamId)) continue;
+    const stack = [assignment.teamId];
+    const teamIds = [];
+    visited.add(assignment.teamId);
+
+    while (stack.length) {
+      const teamId = stack.pop();
+      teamIds.push(teamId);
+      for (const linkedTeamId of links.get(teamId) || []) {
+        if (visited.has(linkedTeamId)) continue;
+        visited.add(linkedTeamId);
+        stack.push(linkedTeamId);
+      }
+    }
+
+    const groupAssignments = teamIds
+      .map((teamId) => assignmentByTeamId.get(teamId))
+      .filter(Boolean)
+      .sort((a, b) => compareTeamAgeGroup(a.team.ageGroup, b.team.ageGroup) || a.team.name.localeCompare(b.team.name));
+    const areaUsed = groupAssignments.length > 1
+      ? Math.max(...groupAssignments.map((item) => item.team.winterTrainingAreas || 1))
+      : groupAssignments.reduce((total, item) => total + (item.team.winterTrainingAreas || 0), 0);
+    groups.push({
+      assignments: groupAssignments,
+      areaUsed,
+      isShared: groupAssignments.length > 1,
+    });
+  }
+
+  return groups.sort((a, b) =>
+    compareTeamAgeGroup(a.assignments[0]?.team.ageGroup, b.assignments[0]?.team.ageGroup) ||
+    formatTrainingGroupTitle(a).localeCompare(formatTrainingGroupTitle(b))
+  );
+}
+
+function getTrainingGroupsAreaUsage(groups) {
+  return groups.reduce((total, group) => total + group.areaUsed, 0);
+}
+
+function formatTrainingGroupTitle(group) {
+  return group.assignments.map((assignment) => formatTeamDisplayName(assignment.team)).join(" + ");
+}
+
+function formatTrainingGroupAreaLabel(group) {
+  if (group.isShared) {
+    return `${formatTrainingAreaLabel(group.areaUsed)} shared`;
+  }
+  return formatTrainingAreaLabel(group.areaUsed);
+}
+
+function formatTrainingGroupFormats(group) {
+  return [...new Set(group.assignments.map((assignment) => assignment.team.format).filter(Boolean))].join(", ");
+}
+
+function renderTrainingGroupScheduleItem(group, planType, canWrite) {
+  const actionName = planType === "summer" ? "summer" : "winter";
+  return `
+    <article class="schedule-item${group.isShared ? " shared-training-item" : ""}">
+      <div class="schedule-item__time">${escapeHtml(formatTrainingGroupTitle(group))}</div>
+      <div class="schedule-item__meta">${escapeHtml(formatTrainingGroupAreaLabel(group))}</div>
+      ${canWrite ? `
+        <div class="schedule-item__actions">
+          ${group.assignments.map((assignment) => `
+            <button class="secondary-btn" type="button" data-edit-${actionName}="${assignment.team.id}">Edit ${escapeHtml(formatTeamDisplayName(assignment.team))}</button>
+            <button class="delete-btn" type="button" data-delete-${actionName}="${assignment.team.id}">Remove</button>
+          `).join("")}
+        </div>
+      ` : ""}
+    </article>`;
+}
+
+function renderSharedWithOptions(select, assignments, selectedTeamId = "") {
+  select.innerHTML = '<option value="">No shared area</option>';
+  for (const assignment of assignments) {
+    const option = document.createElement("option");
+    option.value = assignment.teamId;
+    option.textContent = formatTeamDisplayName(assignment.team);
+    select.appendChild(option);
+  }
+  if (assignments.some((assignment) => assignment.teamId === selectedTeamId)) {
+    select.value = selectedTeamId;
+  }
+  select.disabled = assignments.length === 0 || !canCurrentUserWrite();
 }
 
 function openTrainingPlanPdf(planType) {
@@ -2577,22 +2741,23 @@ function renderTrainingPdfSection(section) {
 
 function renderTrainingPdfCell(assignments, areasUsed, capacity) {
   const isFull = areasUsed >= capacity && capacity > 0;
+  const assignmentGroups = groupTrainingAssignments(assignments);
   return `
     <td>
       <div class="slot-meta${isFull ? " is-full" : ""}">${escapeHtml(`${areasUsed} of ${capacity} areas used`)}</div>
-      ${assignments.length ? `
+      ${assignmentGroups.length ? `
         <div class="team-list">
-          ${assignments.map((assignment) => renderTrainingPdfTeam(assignment.team)).join("")}
+          ${assignmentGroups.map(renderTrainingPdfGroup).join("")}
         </div>
       ` : '<div class="empty-slot">No teams allocated</div>'}
     </td>`;
 }
 
-function renderTrainingPdfTeam(team) {
+function renderTrainingPdfGroup(group) {
   return `
     <div class="team-card">
-      <strong>${escapeHtml(formatTeamDisplayName(team))}</strong>
-      <span>${escapeHtml(`${team.format} · ${formatTrainingAreaLabel(team.winterTrainingAreas)}`)}</span>
+      <strong>${escapeHtml(formatTrainingGroupTitle(group))}</strong>
+      <span>${escapeHtml(`${formatTrainingGroupFormats(group)} · ${formatTrainingGroupAreaLabel(group)}`)}</span>
     </div>`;
 }
 

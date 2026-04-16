@@ -366,6 +366,10 @@ small {
   padding: 0.5rem 0.6rem;
 }
 
+.training-visual-team.is-shared {
+  border-left-color: #c59a17;
+}
+
 .training-visual-team strong,
 .training-visual-team small {
   display: block;
@@ -441,6 +445,10 @@ small {
   border-radius: 8px;
   background: #f7faf9;
   padding: 0.7rem 0.75rem;
+}
+
+.schedule-item.shared-training-item {
+  border-left-color: #c59a17;
 }
 
 .warning-item {
