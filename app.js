@@ -1742,9 +1742,9 @@ function renderFriendlyDayBoard() {
       <div class="friendly-day-board__scroll">
         <div class="friendly-day-board__grid">
           <div class="friendly-day-board__time-row" style="grid-template-columns: ${gridTemplate};">
-            <div class="friendly-day-board__pitch-heading">Pitch</div>
-            ${slots.map((slot) => `
-              <div class="friendly-day-board__time${slot.minutes % 60 === 0 ? "" : " is-half-hour"}">
+            <div class="friendly-day-board__pitch-heading" style="grid-column: 1;">Pitch</div>
+            ${slots.map((slot, index) => `
+              <div class="friendly-day-board__time${slot.minutes % 60 === 0 ? "" : " is-half-hour"}" style="grid-column: ${index + 2};">
                 ${slot.minutes % 60 === 0 ? escapeHtml(slot.label) : ""}
               </div>
             `).join("")}
@@ -1776,20 +1776,20 @@ function renderFriendlyPitchDayRow(pitch, slots, dayBookings, gridTemplate) {
 
   return `
     <div class="friendly-day-board__row" style="grid-template-columns: ${gridTemplate};">
-      <div class="friendly-day-board__pitch-label">
+      <div class="friendly-day-board__pitch-label" style="grid-column: 1;">
         <strong>${escapeHtml(pitch.name)}</strong>
         <span>${escapeHtml(getVenueName(pitch.venueId))}</span>
         <small>${escapeHtml(pitch.formats.join(", "))}${pitch.overlayGroup ? ` / ${escapeHtml(pitch.overlayGroup)}` : ""}</small>
       </div>
-      ${slots.map((slot) => {
+      ${slots.map((slot, index) => {
         const marker = getFriendlyPitchSlotMarker(pitch, slot.minutes, pitchBookings);
         const title = marker === "is-available"
           ? `Select ${pitch.name} at ${slot.label}`
           : describeFriendlyPitchSlotMarker(marker);
         if (marker === "is-available") {
-          return `<button class="friendly-day-board__slot ${marker}" type="button" data-select-friendly-slot="${pitch.id}|${slot.label}" title="${escapeHtml(title)}"></button>`;
+          return `<button class="friendly-day-board__slot ${marker}" type="button" style="grid-column: ${index + 2};" data-select-friendly-slot="${pitch.id}|${slot.label}" title="${escapeHtml(title)}"></button>`;
         }
-        return `<div class="friendly-day-board__slot ${marker}" title="${escapeHtml(title)}"></div>`;
+        return `<div class="friendly-day-board__slot ${marker}" style="grid-column: ${index + 2};" title="${escapeHtml(title)}"></div>`;
       }).join("")}
       ${exactPitchBookings.map((booking) => renderFriendlyDayBookingBlock(booking)).join("")}
     </div>
