@@ -1586,7 +1586,7 @@ function renderWinterTrainingCell(day, time) {
     </section>`;
 }
 
-function renderWinterTeamOptions(selectedTeamId = winterTeamSelect.value) {
+function renderWinterTeamOptions(selectedTeamId = editState.winterTeamId || "") {
   winterTeamSelect.innerHTML = "";
   if (!state.teams.length) {
     winterTeamSelect.innerHTML = `<option value="">Add a team first</option>`;
@@ -1777,6 +1777,7 @@ function buildWinterCandidateSlots(team) {
 
 function clearWinterAssignments() {
   if (!requireWriteAccess()) return;
+  if (!confirm("Clear the entire winter training plan? This cannot be undone unless you have a data export.")) return;
   state.winterTrainingAssignments = [];
   resetWinterAssignmentForm();
   saveState();
@@ -1784,7 +1785,7 @@ function clearWinterAssignments() {
   setTrainingMessage("Winter training plan cleared.", "ok");
 }
 
-function renderSummerTeamOptions(selectedTeamId = summerTeamSelect.value) {
+function renderSummerTeamOptions(selectedTeamId = editState.summerTeamId || "") {
   summerTeamSelect.innerHTML = "";
   if (!state.teams.length) {
     summerTeamSelect.innerHTML = `<option value="">Add a team first</option>`;
@@ -2225,6 +2226,7 @@ function buildSummerCandidateSlots(team) {
 
 function clearSummerAssignments() {
   if (!requireWriteAccess()) return;
+  if (!confirm("Clear the entire summer training plan? This cannot be undone unless you have a data export.")) return;
   state.summerTrainingAssignments = [];
   resetSummerTrainingForm();
   saveState();
