@@ -4,6 +4,7 @@ const INDEXED_DB_VERSION = 1;
 const INDEXED_DB_STORE = "appState";
 const INDEXED_DB_RECORD_KEY = "current";
 const LEGACY_LOCAL_STORAGE_KEYS = ["gljfc-pitch-manager-v1_1", "gljfc-pitch-manager-v1"];
+const WINTER_TRAINING_COLLAPSED_KEY = "gljfc-winter-training-collapsed";
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const WINTER_TRAINING_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
 const WINTER_TRAINING_TIMES = ["18:00", "19:00", "20:00"];
@@ -53,6 +54,7 @@ const defaultData = {
   pitches: [],
   matchSlots: [],
   friendlyBookings: [],
+  pitchBlocks: [],
   lockedAssignments: [],
   winterTrainingAssignments: [],
   summerTrainingAssignments: [],
@@ -68,11 +70,17 @@ const editState = {
   pitchId: null,
   slotId: null,
   friendlyBookingId: null,
+  pitchBlockId: null,
   winterTeamId: null,
   summerTeamId: null,
   userId: null,
 };
-const plannerUiState = { moveTeamId: null, dragTeamId: null, friendlyPendingPitchId: null };
+const plannerUiState = {
+  moveTeamId: null,
+  dragTeamId: null,
+  friendlyPendingPitchId: null,
+  winterTrainingCollapsed: readUiBoolean(WINTER_TRAINING_COLLAPSED_KEY, false),
+};
 const authState = {
   enabled: Boolean(HOSTED_CONFIG.supabaseUrl && HOSTED_CONFIG.supabaseAnonKey && window.supabase?.createClient),
   ready: false,
@@ -132,6 +140,14 @@ const friendlyNotesInput = document.getElementById("friendly-notes");
 const friendlyCalendarMonthInput = document.getElementById("friendly-calendar-month");
 const friendlySubmitBtn = document.getElementById("friendly-submit-btn");
 const friendlyCancelBtn = document.getElementById("friendly-cancel-btn");
+const pitchBlockForm = document.getElementById("pitch-block-form");
+const pitchBlockPitchSelect = document.getElementById("pitch-block-pitch");
+const pitchBlockDateInput = document.getElementById("pitch-block-date");
+const pitchBlockStartInput = document.getElementById("pitch-block-start");
+const pitchBlockEndInput = document.getElementById("pitch-block-end");
+const pitchBlockReasonInput = document.getElementById("pitch-block-reason");
+const pitchBlockSubmitBtn = document.getElementById("pitch-block-submit-btn");
+const pitchBlockCancelBtn = document.getElementById("pitch-block-cancel-btn");
 const friendlyMessage = document.getElementById("friendly-message");
 const friendlyDayBoard = document.getElementById("friendly-day-board");
 const friendlyCalendar = document.getElementById("friendly-calendar");
@@ -151,6 +167,9 @@ const winterCancelBtn = document.getElementById("winter-cancel-btn");
 const winterAutoBtn = document.getElementById("winter-auto-btn");
 const winterClearBtn = document.getElementById("winter-clear-btn");
 const winterPdfBtn = document.getElementById("winter-pdf-btn");
+const winterCollapseBtn = document.getElementById("winter-collapse-btn");
+const winterTrainingSection = document.getElementById("winter-training-section");
+const winterTrainingContent = document.getElementById("winter-training-content");
 const winterTrainingBoard = document.getElementById("winter-training-board");
 const winterTrainingVisual = document.getElementById("winter-training-visual");
 const summerTrainingForm = document.getElementById("summer-training-form");
@@ -215,11 +234,14 @@ function bindEvents() {
   slotForm.addEventListener("submit", onSaveSlot);
   friendlyBookingForm.addEventListener("submit", onSaveFriendlyBooking);
   friendlyCancelBtn.addEventListener("click", resetFriendlyBookingForm);
+  pitchBlockForm.addEventListener("submit", onSavePitchBlock);
+  pitchBlockCancelBtn.addEventListener("click", resetPitchBlockForm);
   friendlyTeamSelect.addEventListener("change", () => renderFriendlyPitchOptions(plannerUiState.friendlyPendingPitchId || friendlyPitchSelect.value));
   friendlyPitchSelect.addEventListener("change", () => {
     plannerUiState.friendlyPendingPitchId = friendlyPitchSelect.value || null;
   });
   friendlyDateInput.addEventListener("change", onFriendlyDateChange);
+  pitchBlockDateInput.addEventListener("change", onPitchBlockDateChange);
   friendlyCalendarMonthInput.addEventListener("change", renderFriendlyCalendar);
   winterAssignmentForm.addEventListener("submit", onSaveWinterAssignment);
   summerTrainingForm.addEventListener("submit", onSaveSummerTraining);
@@ -234,6 +256,7 @@ function bindEvents() {
   winterAutoBtn.addEventListener("click", autoFillWinterAssignments);
   winterClearBtn.addEventListener("click", clearWinterAssignments);
   winterPdfBtn.addEventListener("click", () => openTrainingPlanPdf("winter"));
+  winterCollapseBtn.addEventListener("click", toggleWinterTrainingCollapse);
   [winterTeamSelect, winterDaySelect, winterTimeSelect].forEach((control) =>
     control.addEventListener("change", () => renderWinterSharedWithOptions())
   );
@@ -272,6 +295,7 @@ function renderAll() {
   renderWinterTrainingPlanner();
   renderSummerTrainingPlanner();
   renderUsers();
+  syncWinterTrainingCollapse();
   syncEditorButtons();
   syncVisualPlannerTab();
   syncPermissionUi();
@@ -339,6 +363,18 @@ function normalizeState(rawState = {}) {
         }))
         .filter((booking) => booking.teamId && booking.pitchId && booking.date && booking.kickoffTime)
     : [];
+  const pitchBlocks = Array.isArray(rawState.pitchBlocks)
+    ? rawState.pitchBlocks
+        .map((block) => ({
+          id: block.id || id("block"),
+          pitchId: String(block.pitchId || ""),
+          date: normalizeDateInput(block.date),
+          startTime: normalizeTimeInput(block.startTime),
+          endTime: normalizeTimeInput(block.endTime),
+          reason: String(block.reason || "").trim(),
+        }))
+        .filter((block) => block.pitchId && block.date && block.startTime && block.endTime)
+    : [];
   const lockedAssignments = Array.isArray(rawState.lockedAssignments)
     ? rawState.lockedAssignments
         .map((assignment) => ({
@@ -405,6 +441,7 @@ function normalizeState(rawState = {}) {
     pitches,
     matchSlots,
     friendlyBookings,
+    pitchBlocks,
     lockedAssignments,
     winterTrainingAssignments,
     summerTrainingAssignments,
@@ -420,6 +457,21 @@ function createSeasonState(name = defaultData.season.name, notes = "") {
 
 function getSeasonPreferenceKey() {
   return `gljfc-active-season-${authState.user?.id || "local"}`;
+}
+
+function readUiBoolean(key, fallback = false) {
+  try {
+    const value = localStorage.getItem(key);
+    if (value === "true") return true;
+    if (value === "false") return false;
+  } catch {}
+  return fallback;
+}
+
+function writeUiBoolean(key, value) {
+  try {
+    localStorage.setItem(key, value ? "true" : "false");
+  } catch {}
 }
 
 function rememberActiveSeason(seasonId) {
@@ -859,6 +911,7 @@ function syncPermissionUi() {
     pitchForm,
     slotForm,
     friendlyBookingForm,
+    pitchBlockForm,
     winterAssignmentForm,
     summerTrainingForm,
   ];
@@ -1533,8 +1586,12 @@ function renderMatchSlots() {
 function renderFriendlyBookingPlanner() {
   renderFriendlyTeamOptions(editState.friendlyBookingId ? friendlyTeamSelect.value : "");
   renderFriendlyPitchOptions(editState.friendlyBookingId ? friendlyPitchSelect.value : "");
+  renderPitchBlockPitchOptions(editState.pitchBlockId ? pitchBlockPitchSelect.value : "");
   if (!friendlyDateInput.value) friendlyDateInput.value = toDateInputValue(new Date());
   if (!friendlyKickoffInput.value) friendlyKickoffInput.value = "10:00";
+  if (!pitchBlockDateInput.value) pitchBlockDateInput.value = friendlyDateInput.value || toDateInputValue(new Date());
+  if (!pitchBlockStartInput.value) pitchBlockStartInput.value = "10:00";
+  if (!pitchBlockEndInput.value) pitchBlockEndInput.value = "11:00";
   if (!friendlyCalendarMonthInput.value) friendlyCalendarMonthInput.value = toMonthInputValue(new Date());
   renderFriendlyDayBoard();
   renderFriendlyCalendar();
@@ -1544,6 +1601,16 @@ function renderFriendlyBookingPlanner() {
 function onFriendlyDateChange() {
   const date = normalizeDateInput(friendlyDateInput.value);
   if (date) friendlyCalendarMonthInput.value = date.slice(0, 7);
+  renderFriendlyDayBoard();
+  renderFriendlyCalendar();
+}
+
+function onPitchBlockDateChange() {
+  const date = normalizeDateInput(pitchBlockDateInput.value);
+  if (date) {
+    friendlyDateInput.value = date;
+    friendlyCalendarMonthInput.value = date.slice(0, 7);
+  }
   renderFriendlyDayBoard();
   renderFriendlyCalendar();
 }
@@ -1602,6 +1669,28 @@ function renderFriendlyPitchOptions(selectedPitchId = friendlyPitchSelect.value)
   }
 }
 
+function renderPitchBlockPitchOptions(selectedPitchId = pitchBlockPitchSelect.value) {
+  pitchBlockPitchSelect.innerHTML = "";
+  const matchPitches = sortPitches(state.pitches.filter(isMatchCapablePitch));
+  if (!matchPitches.length) {
+    pitchBlockPitchSelect.innerHTML = `<option value="">Add a match-capable pitch first</option>`;
+    pitchBlockPitchSelect.disabled = true;
+    return;
+  }
+
+  pitchBlockPitchSelect.disabled = false;
+  pitchBlockPitchSelect.appendChild(new Option("Choose a pitch", ""));
+  for (const pitch of matchPitches) {
+    const overlay = pitch.overlayGroup ? `, overlay ${pitch.overlayGroup}` : "";
+    pitchBlockPitchSelect.appendChild(
+      new Option(`${getVenueName(pitch.venueId)} - ${pitch.name} (${pitch.formats.join(", ")}${overlay})`, pitch.id)
+    );
+  }
+  if (matchPitches.some((pitch) => pitch.id === selectedPitchId)) {
+    pitchBlockPitchSelect.value = selectedPitchId;
+  }
+}
+
 function onSaveFriendlyBooking(event) {
   event.preventDefault();
   if (!requireWriteAccess()) return;
@@ -1641,6 +1730,45 @@ function onSaveFriendlyBooking(event) {
   setFriendlyMessage("Friendly booking added.", "ok");
 }
 
+function onSavePitchBlock(event) {
+  event.preventDefault();
+  if (!requireWriteAccess()) return;
+
+  const formData = new FormData(pitchBlockForm);
+  const blockId = editState.pitchBlockId || id("block");
+  const payload = {
+    pitchId: formData.get("pitchId").toString(),
+    date: normalizeDateInput(formData.get("date")),
+    startTime: normalizeTimeInput(formData.get("startTime")),
+    endTime: normalizeTimeInput(formData.get("endTime")),
+    reason: formData.get("reason").toString().trim(),
+  };
+  const block = { id: blockId, ...payload };
+  const issue = validatePitchBlock(block, editState.pitchBlockId);
+  if (issue) return setFriendlyMessage(issue, "error");
+  friendlyDateInput.value = payload.date;
+  friendlyCalendarMonthInput.value = payload.date.slice(0, 7);
+
+  if (editState.pitchBlockId) {
+    const existing = state.pitchBlocks.find((item) => item.id === editState.pitchBlockId);
+    if (!existing) {
+      resetPitchBlockForm();
+      return setFriendlyMessage("That pitch block no longer exists.", "error");
+    }
+    Object.assign(existing, payload);
+    saveState();
+    resetPitchBlockForm({ keepMessage: true });
+    renderFriendlyBookingPlanner();
+    return setFriendlyMessage("Pitch block updated.", "ok");
+  }
+
+  state.pitchBlocks.push(block);
+  saveState();
+  resetPitchBlockForm({ keepMessage: true });
+  renderFriendlyBookingPlanner();
+  setFriendlyMessage("Pitch block added.", "ok");
+}
+
 function validateFriendlyBooking(booking, ignoreBookingId = null) {
   const team = state.teams.find((item) => item.id === booking.teamId);
   const pitch = state.pitches.find((item) => item.id === booking.pitchId);
@@ -1651,6 +1779,7 @@ function validateFriendlyBooking(booking, ignoreBookingId = null) {
   if (!booking.date) return "Choose a valid date for the friendly.";
   if (!booking.kickoffTime) return "Choose a valid kickoff time for the friendly.";
   if (!booking.durationMinutes || booking.durationMinutes < 15) return "Choose a realistic match duration.";
+  const bookingRange = friendlyBookingToRange(booking);
 
   const teamConflict = state.friendlyBookings.find((existing) => {
     if (ignoreBookingId && existing.id === ignoreBookingId) return false;
@@ -1659,6 +1788,12 @@ function validateFriendlyBooking(booking, ignoreBookingId = null) {
   if (teamConflict) {
     const conflictDetails = getFriendlyBookingDetails(teamConflict);
     return `${formatTeamDisplayName(team)} already has a friendly booked from ${teamConflict.kickoffTime} to ${conflictDetails.endTime}.`;
+  }
+
+  const blockConflict = state.pitchBlocks.find((block) => pitchBlockConflictsWithRange(block, pitch, bookingRange));
+  if (blockConflict) {
+    const blockPitch = state.pitches.find((item) => item.id === blockConflict.pitchId);
+    return `${blockPitch?.name || "This pitch"} is blocked from ${blockConflict.startTime} to ${blockConflict.endTime}${blockConflict.reason ? ` for ${blockConflict.reason}` : ""}.`;
   }
 
   const conflict = state.friendlyBookings.find((existing) => {
@@ -1675,6 +1810,36 @@ function validateFriendlyBooking(booking, ignoreBookingId = null) {
   return `${conflictTeam} already has ${conflictPitch} booked from ${conflict.kickoffTime} to ${conflictDetails.endTime}.`;
 }
 
+function validatePitchBlock(block, ignoreBlockId = null) {
+  const pitch = state.pitches.find((item) => item.id === block.pitchId);
+  if (!pitch) return "Choose a valid pitch to block.";
+  if (!block.date) return "Choose a valid date for the pitch block.";
+  if (!block.startTime || !block.endTime) return "Choose valid start and end times for the pitch block.";
+  const range = pitchBlockToRange(block);
+  if (!range || range.end <= range.start) return "Pitch block end time must be after the start time.";
+
+  const bookingConflict = state.friendlyBookings.find((booking) => {
+    const bookingPitch = state.pitches.find((item) => item.id === booking.pitchId);
+    return bookingPitch && pitchBlockConflictsWithRange(block, bookingPitch, friendlyBookingToRange(booking));
+  });
+  if (bookingConflict) {
+    const { team, endTime } = getFriendlyBookingDetails(bookingConflict);
+    return `${formatTeamDisplayName(team) || "A team"} already has a friendly booked from ${bookingConflict.kickoffTime} to ${endTime}.`;
+  }
+
+  const blockConflict = state.pitchBlocks.find((existing) => {
+    if (ignoreBlockId && existing.id === ignoreBlockId) return false;
+    const existingPitch = state.pitches.find((item) => item.id === existing.pitchId);
+    return existingPitch && pitchBlockConflictsWithRange(block, existingPitch, pitchBlockToRange(existing));
+  });
+  if (blockConflict) {
+    const blockPitch = state.pitches.find((item) => item.id === blockConflict.pitchId);
+    return `${blockPitch?.name || "That pitch"} already has a block from ${blockConflict.startTime} to ${blockConflict.endTime}.`;
+  }
+
+  return null;
+}
+
 function friendlyBookingsConflict(bookingA, bookingB) {
   if (bookingA.date !== bookingB.date) return false;
   const pitchA = state.pitches.find((pitch) => pitch.id === bookingA.pitchId);
@@ -1682,6 +1847,36 @@ function friendlyBookingsConflict(bookingA, bookingB) {
   if (!pitchA || !pitchB) return false;
   if (!pitchesSharePhysicalSpace(pitchA, pitchB)) return false;
   return friendlyBookingTimesOverlap(bookingA, bookingB);
+}
+
+function friendlyBookingToRange(booking) {
+  const start = toClockMinutes(booking.kickoffTime);
+  if (!Number.isFinite(start)) return null;
+  return {
+    date: booking.date,
+    start,
+    end: start + booking.durationMinutes,
+  };
+}
+
+function pitchBlockToRange(block) {
+  const start = toClockMinutes(block.startTime);
+  const end = toClockMinutes(block.endTime);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  return {
+    date: block.date,
+    start,
+    end,
+  };
+}
+
+function pitchBlockConflictsWithRange(block, targetPitch, range) {
+  if (!range || block.date !== range.date) return false;
+  const blockPitch = state.pitches.find((pitch) => pitch.id === block.pitchId);
+  if (!blockPitch || !targetPitch || !pitchesSharePhysicalSpace(blockPitch, targetPitch)) return false;
+  const blockRange = pitchBlockToRange(block);
+  if (!blockRange || blockRange.end <= blockRange.start) return false;
+  return timesOverlap(blockRange.start, blockRange.end, range.start, range.end);
 }
 
 function friendlyBookingTimesOverlap(bookingA, bookingB) {
@@ -1721,6 +1916,9 @@ function renderFriendlyDayBoard() {
   const dayBookings = state.friendlyBookings
     .filter((booking) => booking.date === selectedDate)
     .sort((a, b) => a.kickoffTime.localeCompare(b.kickoffTime));
+  const dayBlocks = state.pitchBlocks
+    .filter((block) => block.date === selectedDate)
+    .sort((a, b) => a.startTime.localeCompare(b.startTime));
 
   if (!matchPitches.length) {
     friendlyDayBoard.innerHTML = `<p class="empty-state">Add match-capable pitches in Venue Pitches to build the daily availability board.</p>`;
@@ -1736,6 +1934,7 @@ function renderFriendlyDayBoard() {
         <div class="friendly-day-board__legend" aria-label="Day board legend">
           <span><i class="is-available"></i> Available</span>
           <span><i class="is-booked"></i> Booked</span>
+          <span><i class="is-maintenance"></i> Blocked</span>
           <span><i class="is-blocked"></i> Overlay blocked</span>
         </div>
       </div>
@@ -1749,13 +1948,15 @@ function renderFriendlyDayBoard() {
               </div>
             `).join("")}
           </div>
-          ${matchPitches.map((pitch) => renderFriendlyPitchDayRow(pitch, slots, dayBookings, gridTemplate)).join("")}
+          ${matchPitches.map((pitch) => renderFriendlyPitchDayRow(pitch, slots, dayBookings, dayBlocks, gridTemplate)).join("")}
         </div>
       </div>
     </section>
   `;
   bindRowActions(friendlyDayBoard, "edit-friendly", startEditFriendlyBooking);
   bindRowActions(friendlyDayBoard, "delete-friendly", deleteFriendlyBooking);
+  bindRowActions(friendlyDayBoard, "edit-pitch-block", startEditPitchBlock);
+  bindRowActions(friendlyDayBoard, "delete-pitch-block", deletePitchBlock);
   bindRowActions(friendlyDayBoard, "select-friendly-slot", selectFriendlySlot);
 }
 
@@ -1767,12 +1968,18 @@ function buildFriendlyDaySlots() {
   return slots;
 }
 
-function renderFriendlyPitchDayRow(pitch, slots, dayBookings, gridTemplate) {
+function renderFriendlyPitchDayRow(pitch, slots, dayBookings, dayBlocks, gridTemplate) {
   const pitchBookings = dayBookings.filter((booking) => {
     const bookingPitch = state.pitches.find((item) => item.id === booking.pitchId);
     return bookingPitch && pitchesSharePhysicalSpace(pitch, bookingPitch);
   });
   const exactPitchBookings = pitchBookings.filter((booking) => booking.pitchId === pitch.id);
+  const pitchBlocks = dayBlocks.filter((block) => pitchBlockConflictsWithRange(block, pitch, {
+    date: block.date,
+    start: 0,
+    end: 24 * 60,
+  }));
+  const exactPitchBlocks = pitchBlocks.filter((block) => block.pitchId === pitch.id);
 
   return `
     <div class="friendly-day-board__row" style="grid-template-columns: ${gridTemplate};">
@@ -1782,7 +1989,7 @@ function renderFriendlyPitchDayRow(pitch, slots, dayBookings, gridTemplate) {
         <small>${escapeHtml(pitch.formats.join(", "))}${pitch.overlayGroup ? ` / ${escapeHtml(pitch.overlayGroup)}` : ""}</small>
       </div>
       ${slots.map((slot, index) => {
-        const marker = getFriendlyPitchSlotMarker(pitch, slot.minutes, pitchBookings);
+        const marker = getFriendlyPitchSlotMarker(pitch, slot.minutes, pitchBookings, pitchBlocks);
         const title = marker === "is-available"
           ? `Select ${pitch.name} at ${slot.label}`
           : describeFriendlyPitchSlotMarker(marker);
@@ -1792,11 +1999,12 @@ function renderFriendlyPitchDayRow(pitch, slots, dayBookings, gridTemplate) {
         return `<div class="friendly-day-board__slot ${marker}" style="grid-column: ${index + 2};" title="${escapeHtml(title)}"></div>`;
       }).join("")}
       ${exactPitchBookings.map((booking) => renderFriendlyDayBookingBlock(booking)).join("")}
+      ${exactPitchBlocks.map((block) => renderPitchBlockDayBlock(block)).join("")}
     </div>
   `;
 }
 
-function getFriendlyPitchSlotMarker(pitch, slotStart, pitchBookings) {
+function getFriendlyPitchSlotMarker(pitch, slotStart, pitchBookings, pitchBlocks = []) {
   const slotEnd = slotStart + FRIENDLY_DAY_SLOT_MINUTES;
   const conflict = pitchBookings.find((booking) => {
     const bookingPitch = state.pitches.find((item) => item.id === booking.pitchId);
@@ -1804,12 +2012,19 @@ function getFriendlyPitchSlotMarker(pitch, slotStart, pitchBookings) {
     if (!bookingPitch || !Number.isFinite(bookingStart)) return false;
     return timesOverlap(slotStart, slotEnd, bookingStart, bookingStart + booking.durationMinutes);
   });
-  if (!conflict) return "is-available";
-  return conflict.pitchId === pitch.id ? "is-booked" : "is-blocked";
+  if (conflict) return conflict.pitchId === pitch.id ? "is-booked" : "is-blocked";
+
+  const block = pitchBlocks.find((item) => {
+    const range = pitchBlockToRange(item);
+    return range && timesOverlap(slotStart, slotEnd, range.start, range.end);
+  });
+  if (!block) return "is-available";
+  return block.pitchId === pitch.id ? "is-maintenance" : "is-blocked";
 }
 
 function describeFriendlyPitchSlotMarker(marker) {
   if (marker === "is-booked") return "Booked";
+  if (marker === "is-maintenance") return "Pitch blocked";
   if (marker === "is-blocked") return "Unavailable because an overlayed pitch is booked";
   return "Available";
 }
@@ -1841,6 +2056,32 @@ function renderFriendlyDayBookingBlock(booking) {
   `;
 }
 
+function renderPitchBlockDayBlock(block) {
+  const pitch = state.pitches.find((item) => item.id === block.pitchId);
+  const range = pitchBlockToRange(block);
+  if (!pitch || !range) return "";
+
+  const clampedStart = Math.max(range.start, FRIENDLY_DAY_START_MINUTES);
+  const clampedEnd = Math.min(range.end, FRIENDLY_DAY_END_MINUTES);
+  if (clampedEnd <= FRIENDLY_DAY_START_MINUTES || clampedStart >= FRIENDLY_DAY_END_MINUTES) return "";
+
+  const startIndex = Math.floor((clampedStart - FRIENDLY_DAY_START_MINUTES) / FRIENDLY_DAY_SLOT_MINUTES);
+  const endIndex = Math.ceil((clampedEnd - FRIENDLY_DAY_START_MINUTES) / FRIENDLY_DAY_SLOT_MINUTES);
+  const canWrite = canCurrentUserWrite();
+  return `
+    <article class="friendly-day-board__booking is-maintenance" style="grid-column: ${startIndex + 2} / ${endIndex + 2};">
+      <strong>${escapeHtml(block.startTime)}-${escapeHtml(block.endTime)}</strong>
+      <span>${escapeHtml(block.reason || "Pitch blocked")}</span>
+      ${canWrite ? `
+        <div class="friendly-day-board__actions">
+          <button class="secondary-btn" type="button" data-edit-pitch-block="${block.id}">Edit</button>
+          <button class="delete-btn" type="button" data-delete-pitch-block="${block.id}">Del</button>
+        </div>
+      ` : ""}
+    </article>
+  `;
+}
+
 function renderFriendlyCalendar() {
   if (!friendlyCalendar) return;
   const monthValue = friendlyCalendarMonthInput.value || toMonthInputValue(new Date());
@@ -1856,6 +2097,7 @@ function renderFriendlyCalendar() {
   const startOffset = (firstOfMonth.getDay() + 6) % 7;
   const firstGridDay = new Date(year, monthIndex, 1 - startOffset);
   const bookingsByDate = groupFriendlyBookingsByDate(monthValue);
+  const blocksByDate = groupPitchBlocksByDate(monthValue);
   const selectedDate = normalizeDateInput(friendlyDateInput.value);
 
   const dayNameHtml = DAYS.map((day) => `<div class="friendly-calendar__day-name">${escapeHtml(day.slice(0, 3))}</div>`).join("");
@@ -1866,10 +2108,12 @@ function renderFriendlyCalendar() {
     const dateKey = toDateInputValue(cellDate);
     const isOutside = cellDate.getMonth() !== monthIndex;
     const bookings = bookingsByDate.get(dateKey) || [];
+    const blocks = blocksByDate.get(dateKey) || [];
     cells.push(`
       <div class="friendly-calendar__cell${isOutside ? " is-outside" : ""}${dateKey === selectedDate ? " is-selected" : ""}">
         <button class="friendly-calendar__date" type="button" data-select-friendly-date="${dateKey}">${cellDate.getDate()}</button>
         ${bookings.map(renderFriendlyBookingCard).join("")}
+        ${blocks.map(renderPitchBlockCalendarCard).join("")}
       </div>
     `);
   }
@@ -1884,6 +2128,8 @@ function renderFriendlyCalendar() {
   `;
   bindRowActions(friendlyCalendar, "edit-friendly", startEditFriendlyBooking);
   bindRowActions(friendlyCalendar, "delete-friendly", deleteFriendlyBooking);
+  bindRowActions(friendlyCalendar, "edit-pitch-block", startEditPitchBlock);
+  bindRowActions(friendlyCalendar, "delete-pitch-block", deletePitchBlock);
   bindRowActions(friendlyCalendar, "select-friendly-date", selectFriendlyDate);
 }
 
@@ -1931,6 +2177,19 @@ function groupFriendlyBookingsByDate(monthValue) {
   return byDate;
 }
 
+function groupPitchBlocksByDate(monthValue) {
+  const byDate = new Map();
+  for (const block of state.pitchBlocks) {
+    if (!block.date.startsWith(monthValue)) continue;
+    if (!byDate.has(block.date)) byDate.set(block.date, []);
+    byDate.get(block.date).push(block);
+  }
+  for (const blocks of byDate.values()) {
+    blocks.sort((a, b) => a.startTime.localeCompare(b.startTime));
+  }
+  return byDate;
+}
+
 function renderFriendlyBookingCard(booking) {
   const { team, pitch, endTime } = getFriendlyBookingDetails(booking);
   const canWrite = canCurrentUserWrite();
@@ -1953,9 +2212,42 @@ function renderFriendlyBookingCard(booking) {
   `;
 }
 
+function renderPitchBlockCalendarCard(block) {
+  const pitch = state.pitches.find((item) => item.id === block.pitchId);
+  const canWrite = canCurrentUserWrite();
+  return `
+    <article class="friendly-booking-card is-maintenance">
+      <strong>${escapeHtml(block.startTime)}-${escapeHtml(block.endTime)}</strong>
+      <span>${escapeHtml(block.reason || "Pitch blocked")}</span>
+      <small>${escapeHtml(pitch ? `${getVenueName(pitch.venueId)} / ${pitch.name}` : "Deleted pitch")}</small>
+      ${canWrite ? `
+        <div class="friendly-booking-actions">
+          <button class="secondary-btn" type="button" data-edit-pitch-block="${block.id}">Edit</button>
+          <button class="delete-btn" type="button" data-delete-pitch-block="${block.id}">Delete</button>
+        </div>
+      ` : ""}
+    </article>
+  `;
+}
+
 function renderPlannerOutputs() {
   renderOptimisedHomePlan();
   renderVisualPlanner();
+}
+
+function toggleWinterTrainingCollapse() {
+  plannerUiState.winterTrainingCollapsed = !plannerUiState.winterTrainingCollapsed;
+  writeUiBoolean(WINTER_TRAINING_COLLAPSED_KEY, plannerUiState.winterTrainingCollapsed);
+  syncWinterTrainingCollapse();
+}
+
+function syncWinterTrainingCollapse() {
+  if (!winterTrainingSection || !winterTrainingContent || !winterCollapseBtn) return;
+  const collapsed = Boolean(plannerUiState.winterTrainingCollapsed);
+  winterTrainingContent.hidden = collapsed;
+  winterTrainingSection.classList.toggle("is-collapsed", collapsed);
+  winterCollapseBtn.textContent = collapsed ? "Show Winter" : "Hide Winter";
+  winterCollapseBtn.setAttribute("aria-expanded", String(!collapsed));
 }
 
 function renderWinterTrainingPlanner() {
@@ -4519,6 +4811,23 @@ function startEditFriendlyBooking(bookingId) {
   syncEditorButtons();
 }
 
+function startEditPitchBlock(blockId) {
+  const block = state.pitchBlocks.find((item) => item.id === blockId);
+  if (!block) return setFriendlyMessage("That pitch block could not be found.", "error");
+  setActiveTab("friendlies");
+  editState.pitchBlockId = blockId;
+  renderPitchBlockPitchOptions(block.pitchId);
+  pitchBlockDateInput.value = block.date;
+  pitchBlockStartInput.value = block.startTime;
+  pitchBlockEndInput.value = block.endTime;
+  pitchBlockReasonInput.value = block.reason || "";
+  friendlyDateInput.value = block.date;
+  friendlyCalendarMonthInput.value = block.date.slice(0, 7);
+  renderFriendlyDayBoard();
+  renderFriendlyCalendar();
+  syncEditorButtons();
+}
+
 function resetTeamForm() {
   editState.teamId = null;
   teamForm.reset();
@@ -4547,6 +4856,16 @@ function resetFriendlyBookingForm({ keepMessage = false } = {}) {
   syncEditorButtons();
   if (!keepMessage) setFriendlyMessage("", "ok");
 }
+function resetPitchBlockForm({ keepMessage = false } = {}) {
+  editState.pitchBlockId = null;
+  pitchBlockForm.reset();
+  pitchBlockDateInput.value = friendlyDateInput.value || toDateInputValue(new Date());
+  pitchBlockStartInput.value = "10:00";
+  pitchBlockEndInput.value = "11:00";
+  renderPitchBlockPitchOptions();
+  syncEditorButtons();
+  if (!keepMessage) setFriendlyMessage("", "ok");
+}
 
 function syncEditorButtons() {
   teamSubmitBtn.textContent = editState.teamId ? "Save Team Changes" : "Add Team";
@@ -4554,6 +4873,7 @@ function syncEditorButtons() {
   pitchSubmitBtn.textContent = editState.pitchId ? "Save Pitch Changes" : "Add Pitch";
   slotSubmitBtn.textContent = editState.slotId ? "Save Slot Changes" : "Add Slot";
   friendlySubmitBtn.textContent = editState.friendlyBookingId ? "Save Friendly Booking" : "Add Friendly Booking";
+  pitchBlockSubmitBtn.textContent = editState.pitchBlockId ? "Save Pitch Block" : "Add Pitch Block";
   winterSubmitBtn.textContent = editState.winterTeamId ? "Save Winter Changes" : "Assign Winter Slot";
   summerSubmitBtn.textContent = editState.summerTeamId ? "Save Summer Changes" : "Assign Summer Slot";
   userSubmitBtn.textContent = editState.userId ? "Save User Changes" : "Add User";
@@ -4562,6 +4882,7 @@ function syncEditorButtons() {
   pitchCancelBtn.hidden = !editState.pitchId;
   slotCancelBtn.hidden = !editState.slotId;
   friendlyCancelBtn.hidden = !editState.friendlyBookingId;
+  pitchBlockCancelBtn.hidden = !editState.pitchBlockId;
   winterCancelBtn.hidden = !editState.winterTeamId;
   summerCancelBtn.hidden = !editState.summerTeamId;
   userCancelBtn.hidden = !editState.userId;
@@ -4601,6 +4922,7 @@ function deleteVenue(venueId) {
   state.pitches = state.pitches.filter((pitch) => pitch.venueId !== venueId);
   state.matchSlots = state.matchSlots.filter((slot) => !deletedPitchIds.includes(slot.pitchId));
   state.friendlyBookings = state.friendlyBookings.filter((booking) => !deletedPitchIds.includes(booking.pitchId));
+  state.pitchBlocks = state.pitchBlocks.filter((block) => !deletedPitchIds.includes(block.pitchId));
   state.lockedAssignments = state.lockedAssignments.filter((assignment) => !deletedSlotIds.includes(assignment.slotId));
   state.summerTrainingAssignments = state.summerTrainingAssignments.filter((assignment) => assignment.venueId !== venueId);
   if (editState.venueId === venueId) resetVenueForm();
@@ -4611,6 +4933,12 @@ function deleteVenue(venueId) {
     !state.friendlyBookings.some((booking) => booking.id === editState.friendlyBookingId)
   ) {
     resetFriendlyBookingForm();
+  }
+  if (
+    editState.pitchBlockId &&
+    !state.pitchBlocks.some((block) => block.id === editState.pitchBlockId)
+  ) {
+    resetPitchBlockForm();
   }
   if (editState.summerTeamId && !state.summerTrainingAssignments.some((assignment) => assignment.teamId === editState.summerTeamId)) {
     resetSummerTrainingForm();
@@ -4624,7 +4952,7 @@ function deleteVenue(venueId) {
   renderFriendlyBookingPlanner();
   renderPlannerOutputs();
   renderSummerTrainingPlanner();
-  setMessage("Venue deleted with its pitches, recurring match slots, friendly bookings, and linked summer training assignments.", "ok");
+  setMessage("Venue deleted with its pitches, recurring match slots, friendly bookings, pitch blocks, and linked summer training assignments.", "ok");
 }
 
 function deletePitch(pitchId) {
@@ -4633,6 +4961,7 @@ function deletePitch(pitchId) {
   state.pitches = state.pitches.filter((pitch) => pitch.id !== pitchId);
   state.matchSlots = state.matchSlots.filter((slot) => slot.pitchId !== pitchId);
   state.friendlyBookings = state.friendlyBookings.filter((booking) => booking.pitchId !== pitchId);
+  state.pitchBlocks = state.pitchBlocks.filter((block) => block.pitchId !== pitchId);
   state.lockedAssignments = state.lockedAssignments.filter((assignment) => !deletedSlotIds.includes(assignment.slotId));
   if (editState.pitchId === pitchId) resetPitchForm();
   if (editState.slotId && !state.matchSlots.some((slot) => slot.id === editState.slotId)) resetSlotForm();
@@ -4642,13 +4971,19 @@ function deletePitch(pitchId) {
   ) {
     resetFriendlyBookingForm();
   }
+  if (
+    editState.pitchBlockId &&
+    !state.pitchBlocks.some((block) => block.id === editState.pitchBlockId)
+  ) {
+    resetPitchBlockForm();
+  }
   saveState();
   renderPitches();
   renderSlotPitchOptions();
   renderMatchSlots();
   renderFriendlyBookingPlanner();
   renderPlannerOutputs();
-  setMessage("Pitch deleted with its recurring match slots and friendly bookings.", "ok");
+  setMessage("Pitch deleted with its recurring match slots, friendly bookings, and pitch blocks.", "ok");
 }
 
 function deleteMatchSlot(slotId) {
@@ -4669,6 +5004,15 @@ function deleteFriendlyBooking(bookingId) {
   saveState();
   renderFriendlyBookingPlanner();
   setFriendlyMessage("Friendly booking deleted.", "ok");
+}
+
+function deletePitchBlock(blockId) {
+  if (!requireWriteAccess()) return;
+  state.pitchBlocks = state.pitchBlocks.filter((block) => block.id !== blockId);
+  if (editState.pitchBlockId === blockId) resetPitchBlockForm();
+  saveState();
+  renderFriendlyBookingPlanner();
+  setFriendlyMessage("Pitch block deleted.", "ok");
 }
 
 function onExport() {
@@ -4702,6 +5046,7 @@ function onImport(event) {
         pitchId: null,
         slotId: null,
         friendlyBookingId: null,
+        pitchBlockId: null,
         winterTeamId: null,
         summerTeamId: null,
         userId: null,

@@ -315,6 +315,16 @@ small {
   gap: 1rem;
 }
 
+.subsection-panel {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+}
+
+.subsection-panel h3 {
+  margin: 0 0 0.35rem;
+}
+
 .friendly-calendar {
   display: grid;
   gap: 1rem;
@@ -378,6 +388,10 @@ small {
 
 .friendly-day-board__legend i.is-booked {
   background: var(--accent);
+}
+
+.friendly-day-board__legend i.is-maintenance {
+  background: #b45309;
 }
 
 .friendly-day-board__legend i.is-blocked {
@@ -494,6 +508,10 @@ button.friendly-day-board__slot.is-available:focus-visible {
   background: #fff;
 }
 
+.friendly-day-board__slot.is-maintenance {
+  background: rgba(180, 83, 9, 0.12);
+}
+
 .friendly-day-board__slot.is-blocked {
   background: repeating-linear-gradient(
     -45deg,
@@ -516,6 +534,10 @@ button.friendly-day-board__slot.is-available:focus-visible {
   color: #fff;
   box-shadow: 0 8px 20px rgba(7, 25, 37, 0.18);
   overflow: hidden;
+}
+
+.friendly-day-board__booking.is-maintenance {
+  background: #b45309;
 }
 
 .friendly-day-board__booking strong {
@@ -615,6 +637,12 @@ button.friendly-day-board__slot.is-available:focus-visible {
   border-radius: 8px;
   background: #f3f8f6;
   box-shadow: inset 0 0 0 1px rgba(14, 122, 103, 0.12);
+}
+
+.friendly-booking-card.is-maintenance {
+  border-left-color: #b45309;
+  background: #fff7ed;
+  box-shadow: inset 0 0 0 1px rgba(180, 83, 9, 0.16);
 }
 
 .friendly-booking-card strong {
@@ -1058,6 +1086,10 @@ td.empty-state {
   align-items: flex-start;
   gap: 1rem;
   margin-bottom: 1rem;
+}
+
+.card.is-collapsed .section-header {
+  margin-bottom: 0;
 }
 
 .season-toolbar {
