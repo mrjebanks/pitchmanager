@@ -1724,11 +1724,16 @@ function renderFriendlyDayBoard() {
   }
 
   const slots = buildFriendlyDaySlots();
-  const gridTemplate = `minmax(170px, 220px) repeat(${slots.length}, minmax(34px, 1fr))`;
+  const gridTemplate = `minmax(190px, 230px) repeat(${slots.length}, var(--friendly-time-slot-width))`;
   friendlyDayBoard.innerHTML = `
     <section class="friendly-day-board__panel">
       <div class="friendly-day-board__header">
         <h3>${escapeHtml(formatDateLabel(selectedDate))}</h3>
+        <div class="friendly-day-board__legend" aria-label="Day board legend">
+          <span><i class="is-available"></i> Available</span>
+          <span><i class="is-booked"></i> Booked</span>
+          <span><i class="is-blocked"></i> Overlay blocked</span>
+        </div>
       </div>
       <div class="friendly-day-board__scroll">
         <div class="friendly-day-board__grid">
@@ -1818,7 +1823,7 @@ function renderFriendlyDayBookingBlock(booking) {
       ${canWrite ? `
         <div class="friendly-day-board__actions">
           <button class="secondary-btn" type="button" data-edit-friendly="${booking.id}">Edit</button>
-          <button class="delete-btn" type="button" data-delete-friendly="${booking.id}">Delete</button>
+          <button class="delete-btn" type="button" data-delete-friendly="${booking.id}">Del</button>
         </div>
       ` : ""}
     </article>
