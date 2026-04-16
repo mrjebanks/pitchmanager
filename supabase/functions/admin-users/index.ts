@@ -6,6 +6,7 @@ const allowedTabs = new Set([
   "teams",
   "venues",
   "facilities",
+  "friendlies",
   "assignments",
   "visual",
   "training",

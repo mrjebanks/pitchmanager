@@ -315,6 +315,91 @@ small {
   gap: 1rem;
 }
 
+.friendly-calendar {
+  display: grid;
+  gap: 1rem;
+}
+
+.friendly-calendar__grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(145px, 1fr));
+  min-width: 980px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.friendly-calendar__day-name {
+  padding: 0.65rem;
+  background: #edf4f2;
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.friendly-calendar__day-name:nth-child(7n) {
+  border-right: 0;
+}
+
+.friendly-calendar__cell {
+  min-height: 145px;
+  padding: 0.65rem;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: #fff;
+}
+
+.friendly-calendar__cell:nth-child(7n) {
+  border-right: 0;
+}
+
+.friendly-calendar__cell.is-outside {
+  background: #f8faf9;
+  color: var(--ink-soft);
+}
+
+.friendly-calendar__date {
+  font-weight: 800;
+  margin-bottom: 0.4rem;
+}
+
+.friendly-booking-card {
+  display: grid;
+  gap: 0.18rem;
+  margin-top: 0.45rem;
+  padding: 0.5rem;
+  border-left: 4px solid var(--accent);
+  border-radius: 8px;
+  background: #f3f8f6;
+  box-shadow: inset 0 0 0 1px rgba(14, 122, 103, 0.12);
+}
+
+.friendly-booking-card strong {
+  font-size: 0.82rem;
+}
+
+.friendly-booking-card span {
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.friendly-booking-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.25rem;
+}
+
+.friendly-booking-actions button {
+  padding: 0.28rem 0.45rem;
+  font-size: 0.75rem;
+}
+
 .training-slot-grid {
   grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
 }

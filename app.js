@@ -13,7 +13,8 @@ const TAB_DEFINITIONS = [
   { id: "settings", label: "Settings" },
   { id: "teams", label: "Teams" },
   { id: "venues", label: "Venues" },
-  { id: "facilities", label: "Match Setup" },
+  { id: "facilities", label: "League Slots" },
+  { id: "friendlies", label: "Friendlies" },
   { id: "assignments", label: "Match Plan" },
   { id: "visual", label: "Match Visual" },
   { id: "training", label: "Training" },
@@ -48,6 +49,7 @@ const defaultData = {
   venues: [],
   pitches: [],
   matchSlots: [],
+  friendlyBookings: [],
   lockedAssignments: [],
   winterTrainingAssignments: [],
   summerTrainingAssignments: [],
@@ -62,6 +64,7 @@ const editState = {
   venueId: null,
   pitchId: null,
   slotId: null,
+  friendlyBookingId: null,
   winterTeamId: null,
   summerTeamId: null,
   userId: null,
@@ -115,6 +118,19 @@ const slotPitchSelect = document.getElementById("slot-pitch");
 const slotsBody = document.getElementById("slots-body");
 const slotSubmitBtn = document.getElementById("slot-submit-btn");
 const slotCancelBtn = document.getElementById("slot-cancel-btn");
+const friendlyBookingForm = document.getElementById("friendly-booking-form");
+const friendlyTeamSelect = document.getElementById("friendly-team");
+const friendlyDateInput = document.getElementById("friendly-date");
+const friendlyKickoffInput = document.getElementById("friendly-kickoff");
+const friendlyDurationSelect = document.getElementById("friendly-duration");
+const friendlyPitchSelect = document.getElementById("friendly-pitch");
+const friendlyOpponentInput = document.getElementById("friendly-opponent");
+const friendlyNotesInput = document.getElementById("friendly-notes");
+const friendlyCalendarMonthInput = document.getElementById("friendly-calendar-month");
+const friendlySubmitBtn = document.getElementById("friendly-submit-btn");
+const friendlyCancelBtn = document.getElementById("friendly-cancel-btn");
+const friendlyMessage = document.getElementById("friendly-message");
+const friendlyCalendar = document.getElementById("friendly-calendar");
 const plannerMessage = document.getElementById("planner-message");
 const trainingMessage = document.getElementById("training-message");
 const optimisedHomePlan = document.getElementById("optimised-home-plan");
@@ -193,6 +209,10 @@ function bindEvents() {
   venueForm.addEventListener("submit", onSaveVenue);
   pitchForm.addEventListener("submit", onSavePitch);
   slotForm.addEventListener("submit", onSaveSlot);
+  friendlyBookingForm.addEventListener("submit", onSaveFriendlyBooking);
+  friendlyCancelBtn.addEventListener("click", resetFriendlyBookingForm);
+  friendlyTeamSelect.addEventListener("change", () => renderFriendlyPitchOptions());
+  friendlyCalendarMonthInput.addEventListener("change", renderFriendlyCalendar);
   winterAssignmentForm.addEventListener("submit", onSaveWinterAssignment);
   summerTrainingForm.addEventListener("submit", onSaveSummerTraining);
   exportBtn.addEventListener("click", onExport);
@@ -239,6 +259,7 @@ function renderAll() {
   renderPitches();
   renderSlotPitchOptions();
   renderMatchSlots();
+  renderFriendlyBookingPlanner();
   renderPlannerOutputs();
   renderWinterTrainingPlanner();
   renderSummerTrainingPlanner();
@@ -296,6 +317,20 @@ function normalizeState(rawState = {}) {
     kickoffTime: String(slot.kickoffTime || slot.startTime || ""),
     label: String(slot.label || "").trim(),
   }));
+  const friendlyBookings = Array.isArray(rawState.friendlyBookings)
+    ? rawState.friendlyBookings
+        .map((booking) => ({
+          id: booking.id || id("friendly"),
+          teamId: String(booking.teamId || ""),
+          pitchId: String(booking.pitchId || ""),
+          date: normalizeDateInput(booking.date),
+          kickoffTime: normalizeTimeInput(booking.kickoffTime || booking.startTime),
+          durationMinutes: toPositiveInt(booking.durationMinutes, 90),
+          opponent: String(booking.opponent || "").trim(),
+          notes: String(booking.notes || "").trim(),
+        }))
+        .filter((booking) => booking.teamId && booking.pitchId && booking.date && booking.kickoffTime)
+    : [];
   const lockedAssignments = Array.isArray(rawState.lockedAssignments)
     ? rawState.lockedAssignments
         .map((assignment) => ({
@@ -361,6 +396,7 @@ function normalizeState(rawState = {}) {
     venues,
     pitches,
     matchSlots,
+    friendlyBookings,
     lockedAssignments,
     winterTrainingAssignments,
     summerTrainingAssignments,
@@ -814,6 +850,7 @@ function syncPermissionUi() {
     venueForm,
     pitchForm,
     slotForm,
+    friendlyBookingForm,
     winterAssignmentForm,
     summerTrainingForm,
   ];
@@ -1144,6 +1181,7 @@ function onSaveTeam(event) {
     renderPlannerOutputs();
     renderWinterTrainingPlanner();
     renderSummerTrainingPlanner();
+    renderFriendlyBookingPlanner();
     resetTeamForm();
     return setMessage("Team updated.", "ok");
   }
@@ -1153,6 +1191,7 @@ function onSaveTeam(event) {
   renderPlannerOutputs();
   renderWinterTrainingPlanner();
   renderSummerTrainingPlanner();
+  renderFriendlyBookingPlanner();
   resetTeamForm();
   setMessage("Team added.", "ok");
 }
@@ -1180,6 +1219,7 @@ function onSaveVenue(event) {
     renderMatchSlots();
     renderPlannerOutputs();
     renderSummerTrainingPlanner();
+    renderFriendlyBookingPlanner();
     resetVenueForm();
     return setMessage("Venue updated.", "ok");
   }
@@ -1189,6 +1229,7 @@ function onSaveVenue(event) {
   renderPitchVenueOptions();
   renderSlotPitchOptions();
   renderSummerTrainingPlanner();
+  renderFriendlyBookingPlanner();
   resetVenueForm();
   setMessage("Venue added.", "ok");
 }
@@ -1236,6 +1277,7 @@ function onSavePitch(event) {
     renderSlotPitchOptions();
     renderMatchSlots();
     renderPlannerOutputs();
+    renderFriendlyBookingPlanner();
     resetPitchForm();
     return setMessage(newSlots.length ? "Pitch updated and kickoff slots added." : "Pitch updated.", "ok");
   }
@@ -1252,6 +1294,7 @@ function onSavePitch(event) {
   renderSlotPitchOptions();
   renderMatchSlots();
   renderPlannerOutputs();
+  renderFriendlyBookingPlanner();
   resetPitchForm();
   setMessage(newSlots.length ? "Pitch added with kickoff slots." : "Pitch added.", "ok");
 }
@@ -1477,6 +1520,260 @@ function renderMatchSlots() {
   }
   bindRowActions(slotsBody, "edit-slot", startEditSlot);
   bindRowActions(slotsBody, "delete-slot", deleteMatchSlot);
+}
+
+function renderFriendlyBookingPlanner() {
+  renderFriendlyTeamOptions(editState.friendlyBookingId ? friendlyTeamSelect.value : "");
+  renderFriendlyPitchOptions(editState.friendlyBookingId ? friendlyPitchSelect.value : "");
+  if (!friendlyDateInput.value) friendlyDateInput.value = toDateInputValue(new Date());
+  if (!friendlyKickoffInput.value) friendlyKickoffInput.value = "10:00";
+  if (!friendlyCalendarMonthInput.value) friendlyCalendarMonthInput.value = toMonthInputValue(new Date());
+  renderFriendlyCalendar();
+  syncEditorButtons();
+}
+
+function renderFriendlyTeamOptions(selectedTeamId = friendlyTeamSelect.value) {
+  friendlyTeamSelect.innerHTML = "";
+  if (!state.teams.length) {
+    friendlyTeamSelect.innerHTML = `<option value="">Add teams first</option>`;
+    friendlyTeamSelect.disabled = true;
+    return;
+  }
+
+  friendlyTeamSelect.disabled = false;
+  friendlyTeamSelect.appendChild(new Option("Choose a team", ""));
+  for (const team of sortTeams(state.teams)) {
+    friendlyTeamSelect.appendChild(new Option(formatTeamDisplayName(team), team.id));
+  }
+  if (state.teams.some((team) => team.id === selectedTeamId)) {
+    friendlyTeamSelect.value = selectedTeamId;
+  }
+}
+
+function renderFriendlyPitchOptions(selectedPitchId = friendlyPitchSelect.value) {
+  friendlyPitchSelect.innerHTML = "";
+  const team = state.teams.find((item) => item.id === friendlyTeamSelect.value);
+  if (!team) {
+    friendlyPitchSelect.innerHTML = `<option value="">Choose a team first</option>`;
+    friendlyPitchSelect.disabled = true;
+    return;
+  }
+  const matchPitches = sortPitches(
+    state.pitches.filter(
+      (pitch) =>
+        isMatchCapablePitch(pitch) &&
+        pitch.formats.includes(team.format)
+    )
+  );
+
+  if (!matchPitches.length) {
+    friendlyPitchSelect.innerHTML = `<option value="">No suitable match pitch</option>`;
+    friendlyPitchSelect.disabled = true;
+    return;
+  }
+
+  friendlyPitchSelect.disabled = false;
+  friendlyPitchSelect.appendChild(new Option("Choose a pitch", ""));
+  for (const pitch of matchPitches) {
+    const overlay = pitch.overlayGroup ? `, overlay ${pitch.overlayGroup}` : "";
+    friendlyPitchSelect.appendChild(
+      new Option(`${getVenueName(pitch.venueId)} - ${pitch.name} (${pitch.formats.join(", ")}${overlay})`, pitch.id)
+    );
+  }
+  if (matchPitches.some((pitch) => pitch.id === selectedPitchId)) {
+    friendlyPitchSelect.value = selectedPitchId;
+  }
+}
+
+function onSaveFriendlyBooking(event) {
+  event.preventDefault();
+  if (!requireWriteAccess()) return;
+
+  const formData = new FormData(friendlyBookingForm);
+  const bookingId = editState.friendlyBookingId || id("friendly");
+  const payload = {
+    teamId: formData.get("teamId").toString(),
+    pitchId: formData.get("pitchId").toString(),
+    date: normalizeDateInput(formData.get("date")),
+    kickoffTime: normalizeTimeInput(formData.get("kickoffTime")),
+    durationMinutes: toPositiveInt(formData.get("durationMinutes"), 90),
+    opponent: formData.get("opponent").toString().trim(),
+    notes: formData.get("notes").toString().trim(),
+  };
+  const booking = { id: bookingId, ...payload };
+  const issue = validateFriendlyBooking(booking, editState.friendlyBookingId);
+  if (issue) return setFriendlyMessage(issue, "error");
+
+  if (editState.friendlyBookingId) {
+    const existing = state.friendlyBookings.find((item) => item.id === editState.friendlyBookingId);
+    if (!existing) {
+      resetFriendlyBookingForm();
+      return setFriendlyMessage("That friendly booking no longer exists.", "error");
+    }
+    Object.assign(existing, payload);
+    saveState();
+    resetFriendlyBookingForm({ keepMessage: true });
+    renderFriendlyBookingPlanner();
+    return setFriendlyMessage("Friendly booking updated.", "ok");
+  }
+
+  state.friendlyBookings.push(booking);
+  saveState();
+  resetFriendlyBookingForm({ keepMessage: true });
+  renderFriendlyBookingPlanner();
+  setFriendlyMessage("Friendly booking added.", "ok");
+}
+
+function validateFriendlyBooking(booking, ignoreBookingId = null) {
+  const team = state.teams.find((item) => item.id === booking.teamId);
+  const pitch = state.pitches.find((item) => item.id === booking.pitchId);
+  if (!team) return "Choose a valid team for the friendly.";
+  if (!pitch) return "Choose a valid pitch for the friendly.";
+  if (!isMatchCapablePitch(pitch)) return "Choose a match-capable pitch for the friendly.";
+  if (!pitch.formats.includes(team.format)) return `${pitch.name} does not support ${team.format} matches.`;
+  if (!booking.date) return "Choose a valid date for the friendly.";
+  if (!booking.kickoffTime) return "Choose a valid kickoff time for the friendly.";
+  if (!booking.durationMinutes || booking.durationMinutes < 15) return "Choose a realistic match duration.";
+
+  const teamConflict = state.friendlyBookings.find((existing) => {
+    if (ignoreBookingId && existing.id === ignoreBookingId) return false;
+    return existing.teamId === booking.teamId && friendlyBookingTimesOverlap(booking, existing);
+  });
+  if (teamConflict) {
+    const conflictDetails = getFriendlyBookingDetails(teamConflict);
+    return `${formatTeamDisplayName(team)} already has a friendly booked from ${teamConflict.kickoffTime} to ${conflictDetails.endTime}.`;
+  }
+
+  const conflict = state.friendlyBookings.find((existing) => {
+    if (ignoreBookingId && existing.id === ignoreBookingId) return false;
+    return friendlyBookingsConflict(booking, existing);
+  });
+
+  if (!conflict) return null;
+  const conflictDetails = getFriendlyBookingDetails(conflict);
+  const conflictTeam = formatTeamDisplayName(conflictDetails.team) || "Another team";
+  const conflictPitch = conflictDetails.pitch
+    ? `${getVenueName(conflictDetails.pitch.venueId)} - ${conflictDetails.pitch.name}`
+    : "a deleted pitch";
+  return `${conflictTeam} already has ${conflictPitch} booked from ${conflict.kickoffTime} to ${conflictDetails.endTime}.`;
+}
+
+function friendlyBookingsConflict(bookingA, bookingB) {
+  if (bookingA.date !== bookingB.date) return false;
+  const pitchA = state.pitches.find((pitch) => pitch.id === bookingA.pitchId);
+  const pitchB = state.pitches.find((pitch) => pitch.id === bookingB.pitchId);
+  if (!pitchA || !pitchB) return false;
+  if (!pitchesSharePhysicalSpace(pitchA, pitchB)) return false;
+  return friendlyBookingTimesOverlap(bookingA, bookingB);
+}
+
+function friendlyBookingTimesOverlap(bookingA, bookingB) {
+  if (bookingA.date !== bookingB.date) return false;
+  const startA = toClockMinutes(bookingA.kickoffTime);
+  const startB = toClockMinutes(bookingB.kickoffTime);
+  if (!Number.isFinite(startA) || !Number.isFinite(startB)) return false;
+  return timesOverlap(
+    startA,
+    startA + bookingA.durationMinutes,
+    startB,
+    startB + bookingB.durationMinutes
+  );
+}
+
+function pitchesSharePhysicalSpace(pitchA, pitchB) {
+  if (pitchA.id === pitchB.id) return true;
+  if (pitchA.venueId !== pitchB.venueId) return false;
+  if (!pitchA.overlayGroup || !pitchB.overlayGroup) return false;
+  return pitchA.overlayGroup === pitchB.overlayGroup;
+}
+
+function getFriendlyBookingDetails(booking) {
+  const team = state.teams.find((item) => item.id === booking.teamId) || null;
+  const pitch = state.pitches.find((item) => item.id === booking.pitchId) || null;
+  const startMinutes = toClockMinutes(booking.kickoffTime);
+  const endTime = Number.isFinite(startMinutes)
+    ? toTimeString(startMinutes + booking.durationMinutes)
+    : "";
+  return { team, pitch, endTime };
+}
+
+function renderFriendlyCalendar() {
+  if (!friendlyCalendar) return;
+  const monthValue = friendlyCalendarMonthInput.value || toMonthInputValue(new Date());
+  const monthMatch = monthValue.match(/^(\d{4})-(\d{2})$/);
+  if (!monthMatch) {
+    friendlyCalendar.innerHTML = `<p class="empty-state">Choose a valid month to view friendly bookings.</p>`;
+    return;
+  }
+
+  const year = Number(monthMatch[1]);
+  const monthIndex = Number(monthMatch[2]) - 1;
+  const firstOfMonth = new Date(year, monthIndex, 1);
+  const startOffset = (firstOfMonth.getDay() + 6) % 7;
+  const firstGridDay = new Date(year, monthIndex, 1 - startOffset);
+  const bookingsByDate = groupFriendlyBookingsByDate(monthValue);
+
+  const dayNameHtml = DAYS.map((day) => `<div class="friendly-calendar__day-name">${escapeHtml(day.slice(0, 3))}</div>`).join("");
+  const cells = [];
+  for (let index = 0; index < 42; index += 1) {
+    const cellDate = new Date(firstGridDay);
+    cellDate.setDate(firstGridDay.getDate() + index);
+    const dateKey = toDateInputValue(cellDate);
+    const isOutside = cellDate.getMonth() !== monthIndex;
+    const bookings = bookingsByDate.get(dateKey) || [];
+    cells.push(`
+      <div class="friendly-calendar__cell${isOutside ? " is-outside" : ""}">
+        <div class="friendly-calendar__date">${cellDate.getDate()}</div>
+        ${bookings.map(renderFriendlyBookingCard).join("")}
+      </div>
+    `);
+  }
+
+  friendlyCalendar.innerHTML = `
+    <div class="table-wrap">
+      <div class="friendly-calendar__grid">
+        ${dayNameHtml}
+        ${cells.join("")}
+      </div>
+    </div>
+  `;
+  bindRowActions(friendlyCalendar, "edit-friendly", startEditFriendlyBooking);
+  bindRowActions(friendlyCalendar, "delete-friendly", deleteFriendlyBooking);
+}
+
+function groupFriendlyBookingsByDate(monthValue) {
+  const byDate = new Map();
+  for (const booking of state.friendlyBookings) {
+    if (!booking.date.startsWith(monthValue)) continue;
+    if (!byDate.has(booking.date)) byDate.set(booking.date, []);
+    byDate.get(booking.date).push(booking);
+  }
+  for (const bookings of byDate.values()) {
+    bookings.sort((a, b) => a.kickoffTime.localeCompare(b.kickoffTime));
+  }
+  return byDate;
+}
+
+function renderFriendlyBookingCard(booking) {
+  const { team, pitch, endTime } = getFriendlyBookingDetails(booking);
+  const canWrite = canCurrentUserWrite();
+  const opponent = booking.opponent ? ` v ${booking.opponent}` : "";
+  const venueName = pitch ? getVenueName(pitch.venueId) : "Deleted venue";
+  const pitchName = pitch ? pitch.name : "Deleted pitch";
+  return `
+    <article class="friendly-booking-card">
+      <strong>${escapeHtml(booking.kickoffTime)}-${escapeHtml(endTime)}</strong>
+      <span>${escapeHtml(formatTeamDisplayName(team) || "Deleted team")}${escapeHtml(opponent)}</span>
+      <small>${escapeHtml(venueName)} / ${escapeHtml(pitchName)}</small>
+      ${booking.notes ? `<small>${escapeHtml(booking.notes)}</small>` : ""}
+      ${canWrite ? `
+        <div class="friendly-booking-actions">
+          <button class="secondary-btn" type="button" data-edit-friendly="${booking.id}">Edit</button>
+          <button class="delete-btn" type="button" data-delete-friendly="${booking.id}">Delete</button>
+        </div>
+      ` : ""}
+    </article>
+  `;
 }
 
 function renderPlannerOutputs() {
@@ -4002,7 +4299,7 @@ function startEditVenue(venueId) {
 function startEditPitch(pitchId) {
   const pitch = state.pitches.find((item) => item.id === pitchId);
   if (!pitch) return setMessage("That pitch could not be found.", "error");
-  setActiveTab("facilities");
+  setActiveTab("venues");
   editState.pitchId = pitchId;
   renderPitchVenueOptions(pitch.venueId);
   pitchForm.elements.name.value = pitch.name;
@@ -4026,6 +4323,23 @@ function startEditSlot(slotId) {
   syncEditorButtons();
 }
 
+function startEditFriendlyBooking(bookingId) {
+  const booking = state.friendlyBookings.find((item) => item.id === bookingId);
+  if (!booking) return setFriendlyMessage("That friendly booking could not be found.", "error");
+  setActiveTab("friendlies");
+  editState.friendlyBookingId = bookingId;
+  renderFriendlyTeamOptions(booking.teamId);
+  renderFriendlyPitchOptions(booking.pitchId);
+  friendlyDateInput.value = booking.date;
+  friendlyKickoffInput.value = booking.kickoffTime;
+  friendlyDurationSelect.value = String(booking.durationMinutes);
+  friendlyOpponentInput.value = booking.opponent || "";
+  friendlyNotesInput.value = booking.notes || "";
+  friendlyCalendarMonthInput.value = booking.date.slice(0, 7);
+  renderFriendlyCalendar();
+  syncEditorButtons();
+}
+
 function resetTeamForm() {
   editState.teamId = null;
   teamForm.reset();
@@ -4041,12 +4355,24 @@ function resetVenueForm() {
 }
 function resetPitchForm() { editState.pitchId = null; pitchForm.reset(); renderPitchVenueOptions(); syncEditorButtons(); }
 function resetSlotForm() { editState.slotId = null; slotForm.reset(); renderSlotPitchOptions(); syncEditorButtons(); }
+function resetFriendlyBookingForm({ keepMessage = false } = {}) {
+  editState.friendlyBookingId = null;
+  friendlyBookingForm.reset();
+  friendlyDurationSelect.value = "90";
+  friendlyDateInput.value = toDateInputValue(new Date());
+  friendlyKickoffInput.value = "10:00";
+  renderFriendlyTeamOptions();
+  renderFriendlyPitchOptions();
+  syncEditorButtons();
+  if (!keepMessage) setFriendlyMessage("", "ok");
+}
 
 function syncEditorButtons() {
   teamSubmitBtn.textContent = editState.teamId ? "Save Team Changes" : "Add Team";
   venueSubmitBtn.textContent = editState.venueId ? "Save Venue Changes" : "Add Venue";
   pitchSubmitBtn.textContent = editState.pitchId ? "Save Pitch Changes" : "Add Pitch";
   slotSubmitBtn.textContent = editState.slotId ? "Save Slot Changes" : "Add Slot";
+  friendlySubmitBtn.textContent = editState.friendlyBookingId ? "Save Friendly Booking" : "Add Friendly Booking";
   winterSubmitBtn.textContent = editState.winterTeamId ? "Save Winter Changes" : "Assign Winter Slot";
   summerSubmitBtn.textContent = editState.summerTeamId ? "Save Summer Changes" : "Assign Summer Slot";
   userSubmitBtn.textContent = editState.userId ? "Save User Changes" : "Add User";
@@ -4054,6 +4380,7 @@ function syncEditorButtons() {
   venueCancelBtn.hidden = !editState.venueId;
   pitchCancelBtn.hidden = !editState.pitchId;
   slotCancelBtn.hidden = !editState.slotId;
+  friendlyCancelBtn.hidden = !editState.friendlyBookingId;
   winterCancelBtn.hidden = !editState.winterTeamId;
   summerCancelBtn.hidden = !editState.summerTeamId;
   userCancelBtn.hidden = !editState.userId;
@@ -4061,6 +4388,7 @@ function syncEditorButtons() {
 function deleteTeam(teamId) {
   if (!requireWriteAccess()) return;
   state.teams = state.teams.filter((team) => team.id !== teamId);
+  state.friendlyBookings = state.friendlyBookings.filter((booking) => booking.teamId !== teamId);
   state.lockedAssignments = state.lockedAssignments.filter((assignment) => assignment.teamId !== teamId);
   state.winterTrainingAssignments = state.winterTrainingAssignments.filter((assignment) => assignment.teamId !== teamId);
   state.summerTrainingAssignments = state.summerTrainingAssignments.filter((assignment) => assignment.teamId !== teamId);
@@ -4069,8 +4397,15 @@ function deleteTeam(teamId) {
   if (editState.summerTeamId === teamId) {
     resetSummerTrainingForm();
   }
+  if (
+    editState.friendlyBookingId &&
+    !state.friendlyBookings.some((booking) => booking.id === editState.friendlyBookingId)
+  ) {
+    resetFriendlyBookingForm();
+  }
   saveState();
   renderTeams();
+  renderFriendlyBookingPlanner();
   renderPlannerOutputs();
   renderWinterTrainingPlanner();
   renderSummerTrainingPlanner();
@@ -4084,11 +4419,18 @@ function deleteVenue(venueId) {
   state.venues = state.venues.filter((venue) => venue.id !== venueId);
   state.pitches = state.pitches.filter((pitch) => pitch.venueId !== venueId);
   state.matchSlots = state.matchSlots.filter((slot) => !deletedPitchIds.includes(slot.pitchId));
+  state.friendlyBookings = state.friendlyBookings.filter((booking) => !deletedPitchIds.includes(booking.pitchId));
   state.lockedAssignments = state.lockedAssignments.filter((assignment) => !deletedSlotIds.includes(assignment.slotId));
   state.summerTrainingAssignments = state.summerTrainingAssignments.filter((assignment) => assignment.venueId !== venueId);
   if (editState.venueId === venueId) resetVenueForm();
   if (editState.pitchId && deletedPitchIds.includes(editState.pitchId)) resetPitchForm();
   if (editState.slotId && !state.matchSlots.some((slot) => slot.id === editState.slotId)) resetSlotForm();
+  if (
+    editState.friendlyBookingId &&
+    !state.friendlyBookings.some((booking) => booking.id === editState.friendlyBookingId)
+  ) {
+    resetFriendlyBookingForm();
+  }
   if (editState.summerTeamId && !state.summerTrainingAssignments.some((assignment) => assignment.teamId === editState.summerTeamId)) {
     resetSummerTrainingForm();
   }
@@ -4098,9 +4440,10 @@ function deleteVenue(venueId) {
   renderPitches();
   renderSlotPitchOptions();
   renderMatchSlots();
+  renderFriendlyBookingPlanner();
   renderPlannerOutputs();
   renderSummerTrainingPlanner();
-  setMessage("Venue deleted with its pitches, recurring match slots, and linked summer training assignments.", "ok");
+  setMessage("Venue deleted with its pitches, recurring match slots, friendly bookings, and linked summer training assignments.", "ok");
 }
 
 function deletePitch(pitchId) {
@@ -4108,15 +4451,23 @@ function deletePitch(pitchId) {
   const deletedSlotIds = state.matchSlots.filter((slot) => slot.pitchId === pitchId).map((slot) => slot.id);
   state.pitches = state.pitches.filter((pitch) => pitch.id !== pitchId);
   state.matchSlots = state.matchSlots.filter((slot) => slot.pitchId !== pitchId);
+  state.friendlyBookings = state.friendlyBookings.filter((booking) => booking.pitchId !== pitchId);
   state.lockedAssignments = state.lockedAssignments.filter((assignment) => !deletedSlotIds.includes(assignment.slotId));
   if (editState.pitchId === pitchId) resetPitchForm();
   if (editState.slotId && !state.matchSlots.some((slot) => slot.id === editState.slotId)) resetSlotForm();
+  if (
+    editState.friendlyBookingId &&
+    !state.friendlyBookings.some((booking) => booking.id === editState.friendlyBookingId)
+  ) {
+    resetFriendlyBookingForm();
+  }
   saveState();
   renderPitches();
   renderSlotPitchOptions();
   renderMatchSlots();
+  renderFriendlyBookingPlanner();
   renderPlannerOutputs();
-  setMessage("Pitch deleted with its recurring match slots.", "ok");
+  setMessage("Pitch deleted with its recurring match slots and friendly bookings.", "ok");
 }
 
 function deleteMatchSlot(slotId) {
@@ -4128,6 +4479,15 @@ function deleteMatchSlot(slotId) {
   renderMatchSlots();
   renderPlannerOutputs();
   setMessage("Recurring kickoff slot deleted.", "ok");
+}
+
+function deleteFriendlyBooking(bookingId) {
+  if (!requireWriteAccess()) return;
+  state.friendlyBookings = state.friendlyBookings.filter((booking) => booking.id !== bookingId);
+  if (editState.friendlyBookingId === bookingId) resetFriendlyBookingForm();
+  saveState();
+  renderFriendlyBookingPlanner();
+  setFriendlyMessage("Friendly booking deleted.", "ok");
 }
 
 function onExport() {
@@ -4160,6 +4520,7 @@ function onImport(event) {
         venueId: null,
         pitchId: null,
         slotId: null,
+        friendlyBookingId: null,
         winterTeamId: null,
         summerTeamId: null,
         userId: null,
@@ -4188,6 +4549,43 @@ function bindRowActions(root, action, handler) {
 function setMessage(text, type) {
   plannerMessage.textContent = text;
   plannerMessage.className = `message ${type}`;
+}
+
+function setFriendlyMessage(text, type) {
+  friendlyMessage.textContent = text;
+  friendlyMessage.className = `message ${type}`;
+}
+
+function isMatchCapablePitch(pitch) {
+  return pitch?.usage === "Both" || pitch?.usage === "Match";
+}
+
+function normalizeDateInput(value) {
+  const raw = String(value || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return "";
+  const [year, month, day] = raw.split("-").map(Number);
+  const date = new Date(year, month - 1, day);
+  return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day ? raw : "";
+}
+
+function normalizeTimeInput(value) {
+  const raw = String(value || "").trim();
+  if (!/^\d{2}:\d{2}$/.test(raw)) return "";
+  const [hours, minutes] = raw.split(":").map(Number);
+  return hours >= 0 && hours < 24 && minutes >= 0 && minutes < 60 ? raw : "";
+}
+
+function toDateInputValue(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function toMonthInputValue(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  return `${year}-${month}`;
 }
 
 function sortTeams(teams) {

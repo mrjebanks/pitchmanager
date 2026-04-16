@@ -57,7 +57,8 @@
       <button class="tab-btn is-active" type="button" data-tab-target="settings">Settings</button>
       <button class="tab-btn" type="button" data-tab-target="teams">Teams</button>
       <button class="tab-btn" type="button" data-tab-target="venues">Venues</button>
-      <button class="tab-btn" type="button" data-tab-target="facilities">Match Setup</button>
+      <button class="tab-btn" type="button" data-tab-target="facilities">League Slots</button>
+      <button class="tab-btn" type="button" data-tab-target="friendlies">Friendlies</button>
       <button class="tab-btn" type="button" data-tab-target="assignments">Match Plan</button>
       <button class="tab-btn" type="button" data-tab-target="visual" hidden>Match Visual</button>
       <button class="tab-btn" type="button" data-tab-target="training">Training</button>
@@ -257,11 +258,10 @@
           </table>
         </div>
       </section>
-    </section>
 
-    <section class="tab-panel" data-tab-panel="facilities" hidden>
       <section class="card">
-        <h2>Match Pitches</h2>
+        <h2>Venue Pitches</h2>
+        <p class="overview-intro">Set up the pitches available at each venue. Overlay groups mark pitches that share the same physical space and cannot be booked at the same time.</p>
         <form id="pitch-form" class="grid-3 facility-form">
           <label>
             Venue
@@ -282,7 +282,7 @@
           <label>
             Overlay Group
             <input name="overlayGroup" type="text" placeholder="e.g. GREGSON-GREEN-A" />
-            <small>Optional. Pitches with same group cannot be used at the same time.</small>
+            <small>Optional. Pitches with the same group at the same venue cannot be booked together.</small>
           </label>
           <label class="field-span-2 field-tall">
             Supported Formats
@@ -311,7 +311,7 @@
           <label class="field-span-2 field-tall">
             Kickoff Times
             <textarea name="kickoffTimes" rows="4" placeholder="Optional on new pitch. Enter one time per line, e.g.&#10;10:00&#10;12:30"></textarea>
-            <small>Used when creating a pitch to add multiple recurring kickoff slots at once.</small>
+            <small>Used when creating a pitch to add multiple recurring league kickoff slots at once.</small>
           </label>
           <div class="form-actions field-span-3">
             <button id="pitch-submit-btn" type="submit">Add Pitch</button>
@@ -334,9 +334,11 @@
           </table>
         </div>
       </section>
+    </section>
 
+    <section class="tab-panel" data-tab-panel="facilities" hidden>
       <section class="card">
-        <h2>Home Match Kickoff Slots</h2>
+        <h2>League Kickoff Slots</h2>
         <form id="slot-form" class="grid-3">
         <label>
           Day
@@ -385,7 +387,66 @@
           <tbody id="slots-body"></tbody>
         </table>
       </div>
+      </section>
     </section>
+
+    <section class="tab-panel" data-tab-panel="friendlies" hidden>
+      <section class="card">
+        <div class="section-header">
+          <div>
+            <h2>Friendly Bookings</h2>
+            <p class="overview-intro">Book one-off friendly matches against available match pitches. Overlayed pitches are blocked automatically when times overlap.</p>
+          </div>
+          <label>
+            Calendar Month
+            <input id="friendly-calendar-month" type="month" />
+          </label>
+        </div>
+
+        <form id="friendly-booking-form" class="grid-3">
+          <label>
+            Team
+            <select id="friendly-team" name="teamId" required></select>
+          </label>
+          <label>
+            Date
+            <input id="friendly-date" name="date" type="date" required />
+          </label>
+          <label>
+            Kickoff Time
+            <input id="friendly-kickoff" name="kickoffTime" type="time" required />
+          </label>
+          <label>
+            Duration
+            <select id="friendly-duration" name="durationMinutes" required>
+              <option value="60">60 minutes</option>
+              <option value="75">75 minutes</option>
+              <option value="90">90 minutes</option>
+              <option value="105">105 minutes</option>
+              <option value="120">120 minutes</option>
+            </select>
+          </label>
+          <label>
+            Pitch
+            <select id="friendly-pitch" name="pitchId" required></select>
+          </label>
+          <label>
+            Opposition
+            <input id="friendly-opponent" name="opponent" type="text" placeholder="Opposition club/team" />
+          </label>
+          <label class="field-span-3">
+            Notes
+            <input id="friendly-notes" name="notes" type="text" placeholder="Optional notes, arrival instructions, referee details..." />
+          </label>
+          <div class="form-actions field-span-3">
+            <button id="friendly-submit-btn" type="submit">Add Friendly Booking</button>
+            <button id="friendly-cancel-btn" class="secondary-btn" type="button" hidden>Cancel Edit</button>
+          </div>
+        </form>
+
+        <p id="friendly-message" class="message" aria-live="polite"></p>
+        <div id="friendly-calendar" class="friendly-calendar"></div>
+      </section>
     </section>
 
     <section class="tab-panel" data-tab-panel="assignments" hidden>
