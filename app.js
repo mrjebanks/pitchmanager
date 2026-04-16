@@ -1,4 +1,4 @@
-﻿const APP_VERSION = "V1.1";
+﻿const APP_VERSION = "V1.2";
 const INDEXED_DB_NAME = "gljfc-pitch-manager";
 const INDEXED_DB_VERSION = 1;
 const INDEXED_DB_STORE = "appState";
