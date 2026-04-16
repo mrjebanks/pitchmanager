@@ -48,7 +48,7 @@ const defaultSeasonStore = {
 
 const defaultData = {
   season: { name: "2026/27", notes: "" },
-  settings: { warmupMinutes: 30, packAwayMinutes: 15, showVisualPlanner: true, summerTrainingStartDate: "" },
+  settings: { warmupMinutes: 30, packAwayMinutes: 15, showVisualPlanner: true, summerTrainingStartDate: "", summerTrainingEndDate: "" },
   teams: [],
   venues: [],
   pitches: [],
@@ -185,6 +185,7 @@ const summerAutoBtn = document.getElementById("summer-auto-btn");
 const summerClearBtn = document.getElementById("summer-clear-btn");
 const summerPdfBtn = document.getElementById("summer-pdf-btn");
 const summerTrainingStartDateInput = document.getElementById("summer-training-start-date");
+const summerTrainingEndDateInput = document.getElementById("summer-training-end-date");
 const summerTrainingBoard = document.getElementById("summer-training-board");
 const summerTrainingVisual = document.getElementById("summer-training-visual");
 const exportBtn = document.getElementById("export-btn");
@@ -266,7 +267,8 @@ function bindEvents() {
   summerAutoBtn.addEventListener("click", autoFillSummerAssignments);
   summerClearBtn.addEventListener("click", clearSummerAssignments);
   summerPdfBtn.addEventListener("click", () => openTrainingPlanPdf("summer"));
-  summerTrainingStartDateInput.addEventListener("change", onSaveSummerTrainingStartDate);
+  summerTrainingStartDateInput.addEventListener("change", onSaveSummerTrainingDateRange);
+  summerTrainingEndDateInput.addEventListener("change", onSaveSummerTrainingDateRange);
   summerCancelBtn.addEventListener("click", resetSummerTrainingForm);
   [summerTeamSelect, summerVenueSelect, summerDaySelect, summerTimeSelect].forEach((control) =>
     control.addEventListener("change", () => renderSummerSharedWithOptions())
@@ -289,6 +291,7 @@ function renderAll() {
   packawayMinutesInput.value = state.settings.packAwayMinutes;
   showVisualPlannerInput.checked = state.settings.showVisualPlanner;
   summerTrainingStartDateInput.value = state.settings.summerTrainingStartDate || "";
+  summerTrainingEndDateInput.value = state.settings.summerTrainingEndDate || "";
   renderTeams();
   renderVenues();
   renderPitchVenueOptions();
@@ -439,13 +442,19 @@ function normalizeState(rawState = {}) {
       (assignment, index, all) =>
         all.findIndex((candidate) => candidate.teamId === assignment.teamId) === index
     );
+  const summerTrainingStartDate = normalizeDateInput(rawState.settings?.summerTrainingStartDate);
+  const rawSummerTrainingEndDate = normalizeDateInput(rawState.settings?.summerTrainingEndDate);
+  const summerTrainingEndDate = rawSummerTrainingEndDate && summerTrainingStartDate && rawSummerTrainingEndDate < summerTrainingStartDate
+    ? summerTrainingStartDate
+    : rawSummerTrainingEndDate;
   return {
     season: { ...defaultData.season, ...(rawState.season || {}) },
     settings: {
       warmupMinutes: toPositiveInt(rawState.settings?.warmupMinutes, defaultData.settings.warmupMinutes),
       packAwayMinutes: toPositiveInt(rawState.settings?.packAwayMinutes, defaultData.settings.packAwayMinutes),
       showVisualPlanner: toBoolean(rawState.settings?.showVisualPlanner, defaultData.settings.showVisualPlanner),
-      summerTrainingStartDate: normalizeDateInput(rawState.settings?.summerTrainingStartDate),
+      summerTrainingStartDate,
+      summerTrainingEndDate,
     },
     teams,
     venues,
@@ -931,6 +940,7 @@ function syncPermissionUi() {
   winterPdfBtn.disabled = false;
   summerPdfBtn.disabled = false;
   summerTrainingStartDateInput.disabled = !writeAllowed;
+  summerTrainingEndDateInput.disabled = !writeAllowed;
   seasonSelect.disabled = seasonStore.seasons.length < 2;
   seasonNewBtn.disabled = !writeAllowed;
   seasonDuplicateBtn.disabled = !writeAllowed;
@@ -1228,20 +1238,27 @@ function onSaveSettings(event) {
   setMessage("Global match settings saved.", "ok");
 }
 
-function onSaveSummerTrainingStartDate() {
+function onSaveSummerTrainingDateRange() {
   if (!requireWriteAccess()) {
     summerTrainingStartDateInput.value = state.settings.summerTrainingStartDate || "";
+    summerTrainingEndDateInput.value = state.settings.summerTrainingEndDate || "";
     return;
   }
-  const date = normalizeDateInput(summerTrainingStartDateInput.value);
-  state.settings.summerTrainingStartDate = date;
-  summerTrainingStartDateInput.value = date;
+  const startDate = normalizeDateInput(summerTrainingStartDateInput.value);
+  let endDate = normalizeDateInput(summerTrainingEndDateInput.value);
+  if (startDate && endDate && endDate < startDate) {
+    endDate = startDate;
+  }
+  state.settings.summerTrainingStartDate = startDate;
+  state.settings.summerTrainingEndDate = endDate;
+  summerTrainingStartDateInput.value = startDate;
+  summerTrainingEndDateInput.value = endDate;
   saveState();
   renderSummerTrainingPlanner();
   renderFriendlyBookingPlanner();
   setTrainingMessage(
-    date
-      ? `Summer training will block friendly bookings from ${formatDateLabel(date)}.`
+    startDate
+      ? `Summer training will block friendly bookings ${formatSummerTrainingCalendarWindow()}.`
       : "Summer training calendar blocking is off until a start date is set.",
     "ok"
   );
@@ -1969,7 +1986,8 @@ function formatPitchBlockDateRange(block) {
 function getSummerTrainingBlocksForDate(dateValue) {
   const date = normalizeDateInput(dateValue);
   const startDate = normalizeDateInput(state.settings.summerTrainingStartDate);
-  if (!date || !startDate || date < startDate) return [];
+  const endDate = normalizeDateInput(state.settings.summerTrainingEndDate);
+  if (!date || !startDate || date < startDate || (endDate && date > endDate)) return [];
 
   const day = getDayNameForDate(date);
   if (!WINTER_TRAINING_DAYS.includes(day)) return [];
@@ -2004,6 +2022,15 @@ function getSummerTrainingBlocksForDate(dateValue) {
   }
 
   return blocks.sort((a, b) => a.startTime.localeCompare(b.startTime) || getPitchLabel(a.pitchId).localeCompare(getPitchLabel(b.pitchId)));
+}
+
+function formatSummerTrainingCalendarWindow() {
+  const startDate = normalizeDateInput(state.settings.summerTrainingStartDate);
+  const endDate = normalizeDateInput(state.settings.summerTrainingEndDate);
+  if (!startDate) return "";
+  if (!endDate) return `from ${formatDateLabel(startDate)}`;
+  if (endDate === startDate) return `on ${formatDateLabel(startDate)}`;
+  return `from ${formatDateLabel(startDate)} to ${formatDateLabel(endDate)}`;
 }
 
 function getSummerTrainingBlockPitches(venueId) {
@@ -2831,6 +2858,7 @@ function appendSummerTrainingSummary() {
   const assignedIds = new Set(state.summerTrainingAssignments.map((assignment) => assignment.teamId));
   const unassignedTeams = sortTeams(state.teams).filter((team) => !assignedIds.has(team.id));
   const calendarStartDate = state.settings.summerTrainingStartDate;
+  const calendarWindow = formatSummerTrainingCalendarWindow();
   const board = document.createElement("section");
   board.className = "schedule-board";
   board.innerHTML = `
@@ -2842,7 +2870,7 @@ function appendSummerTrainingSummary() {
       <section class="venue-panel">
         <h4>Summer Venues</h4>
         <p class="venue-panel__meta">${escapeHtml(calendarStartDate
-          ? `Friendly calendar blocks start from ${formatDateLabel(calendarStartDate)}. Two training areas reserve one physical pitch.`
+          ? `Friendly calendar blocks run ${calendarWindow}. Two training areas reserve one physical pitch.`
           : "Set a summer training start date above to block these sessions on the friendly calendar.")}</p>
         <div class="schedule-list">
           ${enabledVenues.length
