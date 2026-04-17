@@ -679,6 +679,7 @@ function getEffectivePermissions(profile = authState.profile) {
   }
   if (profile.role !== "admin") {
     visibleTabs.delete("users");
+    visibleTabs.add("training");
   }
   return {
     canWrite: typeof profile.canWriteOverride === "boolean" ? profile.canWriteOverride : defaults.canWrite,
@@ -700,6 +701,11 @@ function canCurrentUserWrite() {
   if (!authState.enabled) return true;
   if (!authState.profile?.isActive) return false;
   return getEffectivePermissions().canWrite;
+}
+
+function canCurrentUserEditTraining() {
+  if (!authState.enabled) return true;
+  return Boolean(authState.profile?.isActive && isCurrentUserAdmin() && canCurrentUserWrite());
 }
 
 function userCanAccessTab(tabName, profile = authState.profile) {
@@ -827,6 +833,12 @@ function requireWriteAccess() {
   return false;
 }
 
+function requireTrainingWriteAccess() {
+  if (canCurrentUserEditTraining()) return true;
+  setTrainingMessage("Only admins with write access can change training plans.", "error");
+  return false;
+}
+
 function requireAdminAccess() {
   if (isCurrentUserAdmin()) return true;
   setUsersMessage("Admin access is required to manage users.", "error");
@@ -922,6 +934,7 @@ function syncAuthUi() {
 
 function syncPermissionUi() {
   const writeAllowed = canCurrentUserWrite();
+  const trainingWriteAllowed = canCurrentUserEditTraining();
   const manageUsersAllowed = isCurrentUserAdmin();
   const editableForms = [
     seasonForm,
@@ -932,15 +945,15 @@ function syncPermissionUi() {
     slotForm,
     friendlyBookingForm,
     pitchBlockForm,
-    winterAssignmentForm,
-    summerTrainingForm,
   ];
 
   editableForms.forEach((form) => toggleFormDisabled(form, !writeAllowed));
+  toggleFormDisabled(winterAssignmentForm, !trainingWriteAllowed);
+  toggleFormDisabled(summerTrainingForm, !trainingWriteAllowed);
   winterPdfBtn.disabled = false;
   summerPdfBtn.disabled = false;
-  summerTrainingStartDateInput.disabled = !writeAllowed;
-  summerTrainingEndDateInput.disabled = !writeAllowed;
+  summerTrainingStartDateInput.disabled = !trainingWriteAllowed;
+  summerTrainingEndDateInput.disabled = !trainingWriteAllowed;
   seasonSelect.disabled = seasonStore.seasons.length < 2;
   seasonNewBtn.disabled = !writeAllowed;
   seasonDuplicateBtn.disabled = !writeAllowed;
@@ -1239,7 +1252,7 @@ function onSaveSettings(event) {
 }
 
 function onSaveSummerTrainingDateRange() {
-  if (!requireWriteAccess()) {
+  if (!requireTrainingWriteAccess()) {
     summerTrainingStartDateInput.value = state.settings.summerTrainingStartDate || "";
     summerTrainingEndDateInput.value = state.settings.summerTrainingEndDate || "";
     return;
@@ -2535,7 +2548,7 @@ function renderWinterTrainingCell(day, time) {
   const assignments = getWinterAssignmentsForSlot(day, time);
   const assignmentGroups = groupTrainingAssignments(assignments);
   const areasUsed = getTrainingGroupsAreaUsage(assignmentGroups);
-  const canWrite = canCurrentUserWrite();
+  const canWrite = canCurrentUserEditTraining();
   return `
     <section class="venue-panel training-slot-panel">
       <h4>${escapeHtml(day)}</h4>
@@ -2561,7 +2574,7 @@ function renderWinterTeamOptions(selectedTeamId = editState.winterTeamId || "") 
     winterTeamSelect.disabled = true;
     return;
   }
-  winterTeamSelect.disabled = false;
+  winterTeamSelect.disabled = !canCurrentUserEditTraining();
   for (const team of availableTeams) {
     const option = document.createElement("option");
     option.value = team.id;
@@ -2621,7 +2634,7 @@ function renderWinterSharedWithOptions(selectedTeamId = winterSharedWithSelect.v
 
 function onSaveWinterAssignment(event) {
   event.preventDefault();
-  if (!requireWriteAccess()) return;
+  if (!requireTrainingWriteAccess()) return;
   const formData = new FormData(winterAssignmentForm);
   const teamId = String(formData.get("teamId") || "");
   const day = String(formData.get("day") || "");
@@ -2663,6 +2676,7 @@ function validateWinterAssignment(teamId, day, time, ignoreTeamId = null, shared
 }
 
 function startEditWinterAssignment(teamId) {
+  if (!requireTrainingWriteAccess()) return;
   const assignment = state.winterTrainingAssignments.find((item) => item.teamId === teamId);
   if (!assignment) return setTrainingMessage("That winter assignment could not be found.", "error");
   setActiveTab("training");
@@ -2676,7 +2690,7 @@ function startEditWinterAssignment(teamId) {
 }
 
 function deleteWinterAssignment(teamId) {
-  if (!requireWriteAccess()) return;
+  if (!requireTrainingWriteAccess()) return;
   state.winterTrainingAssignments = state.winterTrainingAssignments.filter((assignment) => assignment.teamId !== teamId);
   if (editState.winterTeamId === teamId) resetWinterAssignmentForm();
   saveState();
@@ -2696,7 +2710,7 @@ function resetWinterAssignmentForm() {
 }
 
 function autoFillWinterAssignments() {
-  if (!requireWriteAccess()) return;
+  if (!requireTrainingWriteAccess()) return;
   const assignedIds = new Set(state.winterTrainingAssignments.map((assignment) => assignment.teamId));
   const teamsToAssign = sortTeams(state.teams)
     .filter((team) => !assignedIds.has(team.id))
@@ -2738,7 +2752,7 @@ function buildWinterCandidateSlots(team) {
 }
 
 function clearWinterAssignments() {
-  if (!requireWriteAccess()) return;
+  if (!requireTrainingWriteAccess()) return;
   if (!confirm("Clear the entire winter training plan? This cannot be undone unless you have a data export.")) return;
   state.winterTrainingAssignments = [];
   resetWinterAssignmentForm();
@@ -2760,7 +2774,7 @@ function renderSummerTeamOptions(selectedTeamId = editState.summerTeamId || "") 
     summerTeamSelect.disabled = true;
     return;
   }
-  summerTeamSelect.disabled = false;
+  summerTeamSelect.disabled = !canCurrentUserEditTraining();
   for (const team of availableTeams) {
     const option = document.createElement("option");
     option.value = team.id;
@@ -2779,7 +2793,7 @@ function renderSummerVenueOptions(selectedVenueId = summerVenueSelect.value) {
     summerVenueSelect.disabled = true;
     return;
   }
-  summerVenueSelect.disabled = false;
+  summerVenueSelect.disabled = !canCurrentUserEditTraining();
   for (const venue of enabledVenues) {
     const option = document.createElement("option");
     option.value = venue.id;
@@ -2929,7 +2943,7 @@ function renderSummerTrainingCell(venue, day, time) {
   const assignments = getSummerAssignmentsForSlot(venue.id, day, time);
   const assignmentGroups = groupTrainingAssignments(assignments);
   const areasUsed = getTrainingGroupsAreaUsage(assignmentGroups);
-  const canWrite = canCurrentUserWrite();
+  const canWrite = canCurrentUserEditTraining();
   return `
     <section class="venue-panel training-slot-panel">
       <h4>${escapeHtml(day)}</h4>
@@ -2983,7 +2997,7 @@ function renderSummerTrainingVisual() {
 
 function onSaveSummerTraining(event) {
   event.preventDefault();
-  if (!requireWriteAccess()) return;
+  if (!requireTrainingWriteAccess()) return;
   const formData = new FormData(summerTrainingForm);
   const teamId = String(formData.get("teamId") || "");
   const venueId = String(formData.get("venueId") || "");
@@ -3106,6 +3120,7 @@ function renderSummerSharedWithOptions(selectedTeamId = summerSharedWithSelect.v
 }
 
 function startEditSummerTraining(teamId) {
+  if (!requireTrainingWriteAccess()) return;
   const assignment = state.summerTrainingAssignments.find((item) => item.teamId === teamId);
   if (!assignment) return setTrainingMessage("That summer assignment could not be found.", "error");
   setActiveTab("training");
@@ -3119,7 +3134,7 @@ function startEditSummerTraining(teamId) {
 }
 
 function deleteSummerTraining(teamId) {
-  if (!requireWriteAccess()) return;
+  if (!requireTrainingWriteAccess()) return;
   state.summerTrainingAssignments = state.summerTrainingAssignments.filter((assignment) => assignment.teamId !== teamId);
   if (editState.summerTeamId === teamId) resetSummerTrainingForm();
   saveState();
@@ -3140,7 +3155,7 @@ function resetSummerTrainingForm() {
 }
 
 function autoFillSummerAssignments() {
-  if (!requireWriteAccess()) return;
+  if (!requireTrainingWriteAccess()) return;
   const enabledVenues = getSummerEnabledVenues();
   if (!enabledVenues.length) return setTrainingMessage("Configure at least one summer-enabled venue first.", "error");
 
@@ -3194,7 +3209,7 @@ function buildSummerCandidateSlots(team) {
 }
 
 function clearSummerAssignments() {
-  if (!requireWriteAccess()) return;
+  if (!requireTrainingWriteAccess()) return;
   if (!confirm("Clear the entire summer training plan? This cannot be undone unless you have a data export.")) return;
   state.summerTrainingAssignments = [];
   resetSummerTrainingForm();
@@ -3337,7 +3352,7 @@ function renderSharedWithOptions(select, assignments, selectedTeamId = "") {
   if (assignments.some((assignment) => assignment.teamId === selectedTeamId)) {
     select.value = selectedTeamId;
   }
-  select.disabled = assignments.length === 0 || !canCurrentUserWrite();
+  select.disabled = assignments.length === 0 || !canCurrentUserEditTraining();
 }
 
 function openTrainingPlanPdf(planType) {
