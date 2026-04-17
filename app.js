@@ -703,6 +703,11 @@ function canCurrentUserWrite() {
   return getEffectivePermissions().canWrite;
 }
 
+function canCurrentUserEditFriendlies() {
+  if (!authState.enabled) return true;
+  return Boolean(authState.profile?.isActive);
+}
+
 function canCurrentUserEditTraining() {
   if (!authState.enabled) return true;
   return Boolean(authState.profile?.isActive && isCurrentUserAdmin() && canCurrentUserWrite());
@@ -776,10 +781,10 @@ async function loadState() {
   return state;
 }
 
-async function saveState() {
+async function saveState({ allowFriendliesWrite = false } = {}) {
   persistCurrentSeasonInStore();
   if (authState.enabled) {
-    await saveRemoteState();
+    await saveRemoteState({ allowFriendliesWrite });
     return;
   }
   try {
@@ -812,8 +817,13 @@ async function loadRemoteState() {
   }
 }
 
-async function saveRemoteState() {
-  if (!canCurrentUserWrite()) return;
+async function saveRemoteState({ allowFriendliesWrite = false } = {}) {
+  if (!canCurrentUserWrite()) {
+    if (allowFriendliesWrite && canCurrentUserEditFriendlies()) {
+      await saveRemoteFriendlyBookings();
+    }
+    return;
+  }
   try {
     const { error } = await supabaseClient.from("app_state").upsert({
       id: REMOTE_STATE_RECORD_ID,
@@ -827,9 +837,53 @@ async function saveRemoteState() {
   }
 }
 
+async function saveRemoteFriendlyBookings() {
+  const seasonId = getCurrentSeasonId();
+  if (!seasonId) return;
+
+  try {
+    const { data, error } = await supabaseClient
+      .from("app_state")
+      .select("data")
+      .eq("id", REMOTE_STATE_RECORD_ID)
+      .maybeSingle();
+    if (error) throw error;
+
+    const rawRemoteStore = data?.data || seasonStore;
+    const remoteStore = normalizeSeasonStore(rawRemoteStore);
+    if (rawRemoteStore?.activeSeasonId) {
+      remoteStore.activeSeasonId = String(rawRemoteStore.activeSeasonId);
+    }
+    if (!remoteStore.seasonStates[seasonId]) {
+      throw new Error("This season is not available in the shared planner.");
+    }
+
+    const localSeasonState = seasonStore.seasonStates[seasonId] || state;
+    remoteStore.seasonStates[seasonId] = normalizeState({
+      ...remoteStore.seasonStates[seasonId],
+      friendlyBookings: localSeasonState.friendlyBookings,
+    });
+
+    const { error: updateError } = await supabaseClient.from("app_state").update({
+      data: remoteStore,
+      updated_by: authState.user?.id || null,
+    }).eq("id", REMOTE_STATE_RECORD_ID);
+    if (updateError) throw updateError;
+  } catch (error) {
+    console.error("Failed to save friendly bookings to Supabase.", error);
+    setFriendlyMessage("Unable to save friendly bookings to Supabase.", "error");
+  }
+}
+
 function requireWriteAccess() {
   if (canCurrentUserWrite()) return true;
   setMessage("This account is read-only.", "error");
+  return false;
+}
+
+function requireFriendlyWriteAccess() {
+  if (canCurrentUserEditFriendlies()) return true;
+  setFriendlyMessage("This account cannot change friendly bookings.", "error");
   return false;
 }
 
@@ -934,6 +988,7 @@ function syncAuthUi() {
 
 function syncPermissionUi() {
   const writeAllowed = canCurrentUserWrite();
+  const friendlyWriteAllowed = canCurrentUserEditFriendlies();
   const trainingWriteAllowed = canCurrentUserEditTraining();
   const manageUsersAllowed = isCurrentUserAdmin();
   const editableForms = [
@@ -943,11 +998,11 @@ function syncPermissionUi() {
     venueForm,
     pitchForm,
     slotForm,
-    friendlyBookingForm,
     pitchBlockForm,
   ];
 
   editableForms.forEach((form) => toggleFormDisabled(form, !writeAllowed));
+  toggleFormDisabled(friendlyBookingForm, !friendlyWriteAllowed);
   toggleFormDisabled(winterAssignmentForm, !trainingWriteAllowed);
   toggleFormDisabled(summerTrainingForm, !trainingWriteAllowed);
   winterPdfBtn.disabled = false;
@@ -1690,7 +1745,7 @@ function renderFriendlyTeamOptions(selectedTeamId = friendlyTeamSelect.value) {
     return;
   }
 
-  friendlyTeamSelect.disabled = false;
+  friendlyTeamSelect.disabled = !canCurrentUserEditFriendlies();
   friendlyTeamSelect.appendChild(new Option("Choose a team", ""));
   for (const team of sortTeams(state.teams)) {
     friendlyTeamSelect.appendChild(new Option(formatTeamDisplayName(team), team.id));
@@ -1722,7 +1777,7 @@ function renderFriendlyPitchOptions(selectedPitchId = friendlyPitchSelect.value)
     return;
   }
 
-  friendlyPitchSelect.disabled = false;
+  friendlyPitchSelect.disabled = !canCurrentUserEditFriendlies();
   friendlyPitchSelect.appendChild(new Option("Choose a pitch", ""));
   for (const pitch of matchPitches) {
     const overlay = pitch.overlayGroup ? `, overlay ${pitch.overlayGroup}` : "";
@@ -1745,7 +1800,7 @@ function renderPitchBlockPitchOptions(selectedPitchId = pitchBlockPitchSelect.va
     return;
   }
 
-  pitchBlockPitchSelect.disabled = false;
+  pitchBlockPitchSelect.disabled = !canCurrentUserWrite();
   pitchBlockPitchSelect.appendChild(new Option("Choose a pitch", ""));
   for (const pitch of matchPitches) {
     const overlay = pitch.overlayGroup ? `, overlay ${pitch.overlayGroup}` : "";
@@ -1760,7 +1815,7 @@ function renderPitchBlockPitchOptions(selectedPitchId = pitchBlockPitchSelect.va
 
 function onSaveFriendlyBooking(event) {
   event.preventDefault();
-  if (!requireWriteAccess()) return;
+  if (!requireFriendlyWriteAccess()) return;
 
   const formData = new FormData(friendlyBookingForm);
   const bookingId = editState.friendlyBookingId || id("friendly");
@@ -1784,14 +1839,14 @@ function onSaveFriendlyBooking(event) {
       return setFriendlyMessage("That friendly booking no longer exists.", "error");
     }
     Object.assign(existing, payload);
-    saveState();
+    saveState({ allowFriendliesWrite: true });
     resetFriendlyBookingForm({ keepMessage: true });
     renderFriendlyBookingPlanner();
     return setFriendlyMessage("Friendly booking updated.", "ok");
   }
 
   state.friendlyBookings.push(booking);
-  saveState();
+  saveState({ allowFriendliesWrite: true });
   resetFriendlyBookingForm({ keepMessage: true });
   renderFriendlyBookingPlanner();
   setFriendlyMessage("Friendly booking added.", "ok");
@@ -2160,6 +2215,7 @@ function buildFriendlyDaySlots() {
 }
 
 function renderFriendlyPitchDayRow(pitch, slots, dayBookings, dayBlocks, gridTemplate, selectedDate) {
+  const canBookFriendlies = canCurrentUserEditFriendlies();
   const pitchBookings = dayBookings.filter((booking) => {
     const bookingPitch = state.pitches.find((item) => item.id === booking.pitchId);
     return bookingPitch && pitchesSharePhysicalSpace(pitch, bookingPitch);
@@ -2184,7 +2240,7 @@ function renderFriendlyPitchDayRow(pitch, slots, dayBookings, dayBlocks, gridTem
         const title = marker === "is-available"
           ? `Select ${pitch.name} at ${slot.label}`
           : describeFriendlyPitchSlotMarker(marker);
-        if (marker === "is-available") {
+        if (marker === "is-available" && canBookFriendlies) {
           return `<button class="friendly-day-board__slot ${marker}" type="button" style="grid-column: ${index + 2};" data-select-friendly-slot="${pitch.id}|${slot.label}" title="${escapeHtml(title)}"></button>`;
         }
         return `<div class="friendly-day-board__slot ${marker}" style="grid-column: ${index + 2};" title="${escapeHtml(title)}"></div>`;
@@ -2233,7 +2289,7 @@ function renderFriendlyDayBookingBlock(booking) {
 
   const startIndex = Math.floor((clampedStart - FRIENDLY_DAY_START_MINUTES) / FRIENDLY_DAY_SLOT_MINUTES);
   const endIndex = Math.ceil((clampedEnd - FRIENDLY_DAY_START_MINUTES) / FRIENDLY_DAY_SLOT_MINUTES);
-  const canWrite = canCurrentUserWrite();
+  const canWrite = canCurrentUserEditFriendlies();
   const opponent = booking.opponent ? ` v ${booking.opponent}` : "";
   return `
     <article class="friendly-day-board__booking" style="grid-column: ${startIndex + 2} / ${endIndex + 2};">
@@ -2338,7 +2394,7 @@ function selectFriendlyDate(date) {
 }
 
 function selectFriendlySlot(value) {
-  if (!canCurrentUserWrite()) return;
+  if (!canCurrentUserEditFriendlies()) return;
   const [pitchId, kickoffTime] = String(value || "").split("|");
   const pitch = state.pitches.find((item) => item.id === pitchId);
   const time = normalizeTimeInput(kickoffTime);
@@ -2397,7 +2453,7 @@ function groupPitchBlocksByDate(monthValue) {
 
 function renderFriendlyBookingCard(booking) {
   const { team, pitch, endTime } = getFriendlyBookingDetails(booking);
-  const canWrite = canCurrentUserWrite();
+  const canWrite = canCurrentUserEditFriendlies();
   const opponent = booking.opponent ? ` v ${booking.opponent}` : "";
   const venueName = pitch ? getVenueName(pitch.venueId) : "Deleted venue";
   const pitchName = pitch ? pitch.name : "Deleted pitch";
@@ -5012,6 +5068,7 @@ function startEditSlot(slotId) {
 }
 
 function startEditFriendlyBooking(bookingId) {
+  if (!requireFriendlyWriteAccess()) return;
   const booking = state.friendlyBookings.find((item) => item.id === bookingId);
   if (!booking) return setFriendlyMessage("That friendly booking could not be found.", "error");
   setActiveTab("friendlies");
@@ -5219,10 +5276,10 @@ function deleteMatchSlot(slotId) {
 }
 
 function deleteFriendlyBooking(bookingId) {
-  if (!requireWriteAccess()) return;
+  if (!requireFriendlyWriteAccess()) return;
   state.friendlyBookings = state.friendlyBookings.filter((booking) => booking.id !== bookingId);
   if (editState.friendlyBookingId === bookingId) resetFriendlyBookingForm();
-  saveState();
+  saveState({ allowFriendliesWrite: true });
   renderFriendlyBookingPlanner();
   setFriendlyMessage("Friendly booking deleted.", "ok");
 }

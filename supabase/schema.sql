@@ -125,6 +125,63 @@ as $$
   );
 $$;
 
+create or replace function public.strip_friendlies_from_app_state(raw_state jsonb)
+returns jsonb
+language plpgsql
+immutable
+as $$
+declare
+  stripped jsonb := coalesce(raw_state, '{}'::jsonb) - 'friendlyBookings';
+  season_key text;
+  season_state jsonb;
+begin
+  if jsonb_typeof(stripped -> 'seasonStates') = 'object' then
+    for season_key, season_state in
+      select key, value
+      from jsonb_each(stripped -> 'seasonStates')
+    loop
+      stripped := jsonb_set(
+        stripped,
+        array['seasonStates', season_key],
+        season_state - 'friendlyBookings',
+        true
+      );
+    end loop;
+  end if;
+
+  return stripped;
+end;
+$$;
+
+create or replace function public.guard_app_state_friendlies_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if public.current_user_can_write() then
+    return new;
+  end if;
+
+  if not public.current_user_is_active() then
+    raise exception 'Write access is required.' using errcode = '42501';
+  end if;
+
+  if public.strip_friendlies_from_app_state(new.data) is not distinct from public.strip_friendlies_from_app_state(old.data) then
+    new.updated_by = auth.uid();
+    return new;
+  end if;
+
+  raise exception 'Only friendly bookings can be changed by this account.' using errcode = '42501';
+end;
+$$;
+
+drop trigger if exists guard_app_state_friendlies_write on public.app_state;
+create trigger guard_app_state_friendlies_write
+before update on public.app_state
+for each row execute function public.guard_app_state_friendlies_write();
+
 alter table public.user_profiles enable row level security;
 alter table public.app_state enable row level security;
 
@@ -171,3 +228,11 @@ for update
 to authenticated
 using (public.current_user_can_write())
 with check (public.current_user_can_write());
+
+drop policy if exists "Active users can update friendly bookings" on public.app_state;
+create policy "Active users can update friendly bookings"
+on public.app_state
+for update
+to authenticated
+using (public.current_user_is_active())
+with check (public.current_user_is_active());
