@@ -4531,7 +4531,7 @@ function optimiseHomeGamePlan(slots = state.matchSlots) {
 
   const remainingTeams = [
     ...teams.filter((team) => !lockedTeamIds.has(team.id) && team.kickoffPreference !== "Either"),
-    ...flexibleTeams,
+    ...flexibleTeams.filter((team) => !lockedTeamIds.has(team.id)),
   ];
 
   for (const team of sortTeamsForAssignment(remainingTeams, eligibleSeats)) {
@@ -4671,12 +4671,17 @@ function resolveLockedAssignments(slots, seatList, slotMap) {
   const validLocks = [];
   const lockIssues = [];
   const seatAssignments = Array(seatList.length).fill(null);
+  const lockedTeamIds = new Set();
 
   for (const assignment of state.lockedAssignments || []) {
     const team = state.teams.find((item) => item.id === assignment.teamId);
     const slot = slots.find((item) => item.id === assignment.slotId);
     if (!team || !slot) {
       lockIssues.push("A saved lock references a team or slot that no longer exists.");
+      continue;
+    }
+    if (lockedTeamIds.has(team.id)) {
+      lockIssues.push(`${team.name} has more than one saved locked slot. Keeping the first valid lock only.`);
       continue;
     }
     if (!teamFitsSlot(team, slot, slots)) {
@@ -4690,6 +4695,7 @@ function resolveLockedAssignments(slots, seatList, slotMap) {
     }
 
     seatAssignments[seatIndex] = assignment.teamId;
+    lockedTeamIds.add(team.id);
     validLocks.push(assignment);
   }
 
@@ -5036,6 +5042,7 @@ function findAvailableSeatIndexForTeam(team, slotId, seatList, seatAssignments, 
 
 function canAddTeamToSlotResult(team, result, slots = state.matchSlots) {
   if (!teamFitsSlot(team, result.slot, slots)) return false;
+  if (result.teams.some((item) => item.id === team.id)) return false;
   if (team.format === "3v3") return result.teams.length === 0;
   if (result.teams.some((item) => item.format === "3v3")) return false;
   return result.teams.filter((item) => item.format !== "3v3").length < 2;
