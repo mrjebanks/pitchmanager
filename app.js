@@ -3865,13 +3865,19 @@ function renderOptimisedHomePlan() {
   optimisedHomePlan.innerHTML = "";
   const plan = optimiseHomeGamePlan();
   appendAssignmentMoveEditor(plan);
-  for (const day of DAYS) {
-    const results = plan.slotResults.filter((item) => item.slot.day === day);
-    if (!results.length) continue;
-    appendPlanBoard(day, `${results.filter((item) => item.teams.length > 0).length} of ${results.length} recurring slots used`, results.map(renderSlotCard).join(""));
-  }
   if (!state.matchSlots.length) {
     appendPlanBoard("No Slots Yet", "Add recurring kickoff slots to run the optimiser.", `<p class="empty-state">Create slots with a pitch, day, and kickoff time. The optimiser will fill them automatically.</p>`);
+  } else {
+    for (const group of getVenuePlanGroups(plan.slotResults)) {
+      appendVenuePlanBoard(group);
+    }
+    if (plan.lockIssues.length || plan.unassignedTeams.length) {
+      appendPlanBoard(
+        "Needs Attention",
+        `${plan.unassignedTeams.length} unassigned team${plan.unassignedTeams.length === 1 ? "" : "s"}`,
+        `${renderLockIssues(plan.lockIssues)}${plan.unassignedTeams.length ? renderUnassignedPanel(plan.unassignedTeams) : ""}`
+      );
+    }
   }
 
   renderKickoffSuggestions();
@@ -4312,10 +4318,89 @@ function appendPlanBoard(title, subtitle, bodyHtml) {
   optimisedHomePlan.appendChild(board);
 }
 
-function renderSlotCard(result) {
+function appendVenuePlanBoard(group) {
+  const usedCount = group.results.filter((item) => item.teams.length > 0).length;
+  const pitchCount = new Set(group.results.map((item) => item.slot.pitchId)).size;
+  const dayGroups = DAYS
+    .map((day) => {
+      const dayResults = group.results
+        .filter((item) => item.slot.day === day)
+        .sort(compareVenuePlanResults);
+      if (!dayResults.length) return "";
+      const dayUsedCount = dayResults.filter((item) => item.teams.length > 0).length;
+      return `
+        <section class="venue-plan-day">
+          <div class="venue-plan-day__header">
+            <h4>${escapeHtml(day)}</h4>
+            <span>${escapeHtml(`${dayUsedCount} of ${dayResults.length} slot${dayResults.length === 1 ? "" : "s"} used`)}</span>
+          </div>
+          <div class="venue-plan-day__slots">
+            ${dayResults.map((result) => renderSlotCard(result, { compactVenue: true })).join("")}
+          </div>
+        </section>`;
+    })
+    .filter(Boolean)
+    .join("");
+
+  const board = document.createElement("section");
+  board.className = "schedule-board venue-plan-board";
+  board.innerHTML = `
+    <div class="schedule-board__header">
+      <h3>${escapeHtml(group.venueName)}</h3>
+      <p>${escapeHtml(`${usedCount} of ${group.results.length} recurring slots used across ${pitchCount} pitch${pitchCount === 1 ? "" : "es"}`)}</p>
+    </div>
+    <div class="schedule-board__body venue-plan-body">
+      ${dayGroups}
+    </div>`;
+  optimisedHomePlan.appendChild(board);
+}
+
+function getVenuePlanGroups(results) {
+  const groupMap = new Map();
+  for (const result of results) {
+    const details = getSlotVenueDetails(result.slot);
+    const key = details.venueId || details.venueName;
+    if (!groupMap.has(key)) {
+      groupMap.set(key, {
+        venueId: details.venueId,
+        venueName: details.venueName,
+        results: [],
+      });
+    }
+    groupMap.get(key).results.push(result);
+  }
+
+  return Array.from(groupMap.values()).sort((a, b) => a.venueName.localeCompare(b.venueName));
+}
+
+function getSlotVenueDetails(slot) {
+  const pitch = state.pitches.find((item) => item.id === slot.pitchId);
+  const venue = pitch ? state.venues.find((item) => item.id === pitch.venueId) : null;
+  return {
+    pitch,
+    venue,
+    venueId: venue?.id || "",
+    venueName: venue?.name || "Unknown venue",
+    pitchName: pitch?.name || "Deleted pitch",
+  };
+}
+
+function compareVenuePlanResults(a, b) {
+  const detailsA = getSlotVenueDetails(a.slot);
+  const detailsB = getSlotVenueDetails(b.slot);
+  return (
+    a.slot.kickoffTime.localeCompare(b.slot.kickoffTime) ||
+    detailsA.pitchName.localeCompare(detailsB.pitchName)
+  );
+}
+
+function renderSlotCard(result, options = {}) {
   const pitch = state.pitches.find((item) => item.id === result.slot.pitchId);
   const venue = pitch ? state.venues.find((item) => item.id === pitch.venueId) : null;
   const canWrite = canCurrentUserWrite();
+  const title = options.compactVenue
+    ? (pitch ? pitch.name : "Deleted pitch")
+    : `${venue ? venue.name : "Unknown venue"} / ${pitch ? pitch.name : "Deleted pitch"}`;
   const teamsHtml = result.teams.length
     ? result.teams.map((team) => `
         <article class="schedule-item">
@@ -4335,7 +4420,7 @@ function renderSlotCard(result) {
     : `<p class="empty-state">No team assigned to this slot yet.</p>`;
   return `
     <section class="venue-panel">
-      <h4>${venue ? escapeHtml(venue.name) : "Unknown venue"} / ${pitch ? escapeHtml(pitch.name) : "Deleted pitch"}</h4>
+      <h4>${escapeHtml(title)}</h4>
       <p class="venue-panel__meta">${escapeHtml(`${result.slot.kickoffTime} kickoff · ${describeSlotCapacity(result.slot)} · ${describeRemainingSlotSpace(result)}`)}</p>
       ${result.slot.label ? `<div class="schedule-item__notes">Note: ${escapeHtml(result.slot.label)}</div>` : ""}
       <div class="schedule-list">${teamsHtml}</div>
