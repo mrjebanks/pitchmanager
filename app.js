@@ -9,6 +9,8 @@ const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
 const WINTER_TRAINING_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
 const WINTER_TRAINING_TIMES = ["18:00", "19:00", "20:00"];
 const TIMELINE_PIXELS_PER_HOUR = 88;
+const LEAGUE_KICKOFF_MIN_MINUTES = 9 * 60 + 30;
+const KICKOFF_SUGGESTION_MAX_MINUTES = 18 * 60;
 const FRIENDLY_DAY_START_MINUTES = 8 * 60;
 const FRIENDLY_DAY_END_MINUTES = 22 * 60;
 const FRIENDLY_DAY_SLOT_MINUTES = 30;
@@ -1511,6 +1513,9 @@ function onSaveSlot(event) {
 function validateMatchSlot(slot, ignoreSlotId = null) {
   if (!state.pitches.some((pitch) => pitch.id === slot.pitchId)) return "Choose a valid pitch for the slot.";
   if (!slot.kickoffTime) return "Choose a kickoff time for the slot.";
+  if (!isValidLeagueKickoffTime(slot.kickoffTime)) {
+    return `League kickoff slots cannot be earlier than ${toTimeString(LEAGUE_KICKOFF_MIN_MINUTES)}.`;
+  }
   const duplicateKickoff = state.matchSlots.some((item) => {
     if (ignoreSlotId && item.id === ignoreSlotId) return false;
     if (item.pitchId !== slot.pitchId || item.day !== slot.day) return false;
@@ -1529,9 +1534,19 @@ function parseKickoffTimes(rawValue) {
     if (!/^\d{2}:\d{2}$/.test(value)) {
       return { error: `Kickoff time "${value}" is not in HH:MM format.`, values: [] };
     }
+    if (!isValidLeagueKickoffTime(value)) {
+      return { error: `Kickoff time "${value}" is earlier than the league minimum of ${toTimeString(LEAGUE_KICKOFF_MIN_MINUTES)}.`, values: [] };
+    }
   }
 
   return { error: null, values: [...new Set(values)].sort((a, b) => a.localeCompare(b)) };
+}
+
+function isValidLeagueKickoffTime(time) {
+  const normalized = normalizeTimeInput(time);
+  if (!normalized) return false;
+  const minutes = toClockMinutes(normalized);
+  return minutes >= LEAGUE_KICKOFF_MIN_MINUTES;
 }
 
 function buildPitchKickoffSlots(pitchId, day, kickoffTimes) {
@@ -4276,7 +4291,7 @@ function candidateKickoffTimes(slot) {
 
   for (const offset of offsets) {
     const minutes = currentMinutes + offset;
-    if (minutes < 8 * 60 || minutes > 18 * 60) continue;
+    if (minutes < LEAGUE_KICKOFF_MIN_MINUTES || minutes > KICKOFF_SUGGESTION_MAX_MINUTES) continue;
     const formatted = toTimeString(minutes);
     if (formatted === slot.kickoffTime) continue;
     candidates.push(formatted);
